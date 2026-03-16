@@ -29,7 +29,6 @@ jobs:
         run: |
           helm repo add hull https://vidispine.github.io/hull
           helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts
-          helm repo add cloudpirates oci://registry-1.docker.io/cloudpirates
           helm dependency update .
 
       - name: Run chart-releaser
