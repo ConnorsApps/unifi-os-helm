@@ -586,7 +586,7 @@ hull:
                 - /bin/bash
                 - -c
                 - |
-                  set -xe
+                  set -e
                   # Set global Postgres env for systemd-managed services that rely on libpq defaults.
                   mkdir -p /etc/systemd/system.conf.d
                   cat >/etc/systemd/system.conf.d/10-postgres-env.conf <<EOF

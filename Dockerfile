@@ -175,6 +175,31 @@ RUN set -e \
          && chmod 0755 "/bundle/rootfs/usr/local/bin/${_tool}"; \
        done
 
+# Trim embedded local data-plane services not used in charted/externalized mode.
+# Keep PostgreSQL 14 toolchain for compatibility with existing wrappers.
+RUN set -e \
+    && rm -rf \
+         /bundle/rootfs/usr/bin/mongo \
+         /bundle/rootfs/usr/bin/mongod \
+         /bundle/rootfs/usr/bin/mongos \
+         /bundle/rootfs/usr/bin/rabbitmq* \
+         /bundle/rootfs/usr/sbin/rabbitmq* \
+         /bundle/rootfs/usr/lib/rabbitmq \
+         /bundle/rootfs/usr/lib/erlang \
+         /bundle/rootfs/etc/rabbitmq \
+         /bundle/rootfs/etc/mongodb.conf \
+         /bundle/rootfs/var/lib/mongodb \
+         /bundle/rootfs/var/lib/rabbitmq \
+         /bundle/rootfs/var/log/rabbitmq \
+         /bundle/rootfs/var/log/mongodb \
+         /bundle/rootfs/usr/lib/postgresql/16 \
+         /bundle/rootfs/usr/share/postgresql/16 \
+         /bundle/rootfs/etc/postgresql/16 \
+         /bundle/rootfs/var/lib/postgresql/16 \
+         /bundle/rootfs/usr/share/doc \
+         /bundle/rootfs/usr/share/man \
+         /bundle/rootfs/usr/share/info
+
 FROM scratch
 COPY --from=extractor /bundle/rootfs/ /
 ENTRYPOINT ["/entrypoint.sh"]

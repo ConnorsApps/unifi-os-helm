@@ -32,7 +32,6 @@ build:
 		--platform "$(PLATFORMS)" \
 		--build-arg "UOS_INSTALLER_URL=$(UOS_INSTALLER_URL)" \
 		--tag "$(IMAGE):$(TAG)"
-	podman push "$(IMAGE):$(TAG)"
 
 extract-container-configs:
 	mkdir -p "$(ROOT_DIR)$(FILE_DUMPS_DIR)"
