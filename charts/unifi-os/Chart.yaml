@@ -1,7 +1,7 @@
 apiVersion: v2
 name: unifi-os
 description: >-
-  UniFi OS Server — self-hosted UniFi management platform
+  UniFi OS Server - self-hosted UniFi management platform
 type: application
 version: 0.1.4
 appVersion: "5.0.6"

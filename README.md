@@ -79,7 +79,9 @@ and `global.rabbitmq.connection.password`.
 ### 2. Install
 
 ```bash
-helm upgrade -n unifi --create-namespace unifi ./charts/unifi-os --install \
+helm repo add unifi-os https://connorsapps.github.io/unifi-os-helm
+helm repo update
+helm upgrade -n unifi --create-namespace unifi unifi-os/unifi-os --install \
   -f values.env.yaml
 ```
 
