@@ -4,7 +4,8 @@ on:
   push:
     tags:
       - 'v*'
-
+  workflow_dispatch: {}
+        
 jobs:
   release:
     permissions:
@@ -15,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Helm
         uses: azure/setup-helm@v4
