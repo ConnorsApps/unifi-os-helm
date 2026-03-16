@@ -3,7 +3,7 @@ SHELL := /usr/bin/env bash
 ROOT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Build configuration (override at runtime, e.g. make build TAG=latest)
-IMAGE ?= todo
+IMAGE ?= ghcr.io/connorsapps/unifi-os
 TAG ?= 5.0.6
 PLATFORMS ?= linux/amd64
 # amd64: https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64

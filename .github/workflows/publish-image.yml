@@ -2,8 +2,10 @@ name: Publish Docker Image
 
 on:
   push:
-    tags:
-      - "*"
+    branches:
+      - main
+    paths:
+      - Dockerfile
   workflow_dispatch:
     inputs:
       image_tag:
@@ -17,6 +19,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  DEFAULT_IMAGE_TAG: 5.0.6
   DEFAULT_UOS_INSTALLER_URL: https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64
 
 jobs:
@@ -34,12 +37,10 @@ jobs:
         run: |
           OWNER_LOWER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
 
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            IMAGE_TAG="${GITHUB_REF_NAME}"
-          elif [ -n "${{ inputs.image_tag }}" ]; then
+          if [ -n "${{ inputs.image_tag }}" ]; then
             IMAGE_TAG="${{ inputs.image_tag }}"
           else
-            IMAGE_TAG="manual-${GITHUB_SHA::12}"
+            IMAGE_TAG="${DEFAULT_IMAGE_TAG}"
           fi
 
           if [ -n "${{ inputs.uos_installer_url }}" ]; then

@@ -62,7 +62,7 @@ global:
       uri: ""
 
 image:
-  repository: "todo"
+  repository: "ghcr.io/connorsapps/unifi-os"
   tag: "5.0.6"
 
 hull:
