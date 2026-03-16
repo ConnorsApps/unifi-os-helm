@@ -2,14 +2,8 @@ name: Release Helm Chart
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - Chart.yaml
-      - values.yaml
-      - values*.yaml
-      - templates/**
-      - charts/**
+    tags:
+      - 'v*'
   workflow_dispatch: {}
         
 jobs:
