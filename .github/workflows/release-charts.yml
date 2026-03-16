@@ -2,8 +2,8 @@ name: Release Helm Chart
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
   workflow_dispatch: {}
         
 jobs:
@@ -30,12 +30,12 @@ jobs:
         run: |
           helm repo add hull https://vidispine.github.io/hull
           helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts
-          helm dependency update .
+          helm dependency update charts/unifi-os
 
       - name: Run chart-releaser
         uses: helm/chart-releaser-action@v1.7.0
         with:
-          charts_dir: "${{ github.workspace }}"
+          charts_dir: charts
           skip_existing: true
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"

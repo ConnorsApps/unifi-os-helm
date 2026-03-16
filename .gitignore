@@ -1,4 +1,4 @@
-charts/
+charts/unifi-os/charts/
 *.tgz
 Chart.lock
 
