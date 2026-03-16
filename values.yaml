@@ -1,0 +1,1009 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/vidispine/hull/refs/heads/main/hull/values.schema.json
+
+# ------------------------------------------------------------------
+# Dependencies — MongoDB, PostgreSQL, RabbitMQ
+#
+# | Mode     | Subchart | External | What to set |
+# |----------|----------|----------|-------------|
+# | MongoDB  | mongodb.enabled: true | mongodb.enabled: false | connection.host |
+# | Postgres | postgres.enabled: true | postgres.enabled: false | connection.host |
+# | RabbitMQ | rabbitmq.enabled: true | rabbitmq.enabled: false | connection.host |
+#
+# For external: set connection.host (and connection.password or existingSecret).
+# For subchart: host is derived; set connection.password for app auth.
+# global.*.connection overrides chart-local values below (umbrella charts).
+# When using global: parent can provide existing secrets, otherwise this chart
+# creates and uses the default secret names:
+#   mongodb: mongodb-password, rabbitmq: rabbitmq-auth, postgres: unifi-pg-auth
+# ------------------------------------------------------------------
+# Global connection defaults — set non-sensitive defaults here.
+# Sensitive fields (password, erlangCookie) must be set here or via
+# existingSecret unless using an umbrella chart that provides them.
+# Parent/umbrella can override; subcharts still use:
+#   mongodb-password, rabbitmq-auth, unifi-pg-auth
+# ------------------------------------------------------------------
+global:
+  mongodb:
+    connection:
+      host: ""
+      port: 27017
+      database: unifi
+      username: unifi
+      # Required unless existingSecret.name is set
+      password: ""
+      replicaSetName: ""
+      existingSecret:
+        name: ""
+        passwordKey: ""
+      uri: ""
+  postgres:
+    connection:
+      host: ""
+      port: 5432
+      database: unifi-core
+      user: unifi-core
+      # Required unless existingSecret.name is set
+      password: ""
+      existingSecret:
+        name: ""
+        passwordKey: ""
+  rabbitmq:
+    connection:
+      host: ""
+      port: 5672
+      username: unifi
+      # Required unless existingSecret.name is set
+      password: ""
+      erlangCookie: ""
+      existingSecret:
+        name: ""
+        passwordKey: ""
+        erlangCookieKey: ""
+      uri: ""
+
+image:
+  repository: "todo"
+  tag: "5.0.6"
+
+hull:
+  config:
+    general:
+      # Keep object keys as-is (no automatic release-name prefixing).
+      noObjectNamePrefixes: true
+      # Keep explicit fullname override empty when noObjectNamePrefixes is enabled.
+      fullnameOverride: ""
+    templates:
+      pod:
+        global:
+          # Prevent HULL from trying to create/manage a ServiceAccount named "default"
+          # when object name prefixes are disabled.
+          serviceAccountName: default
+  objects:
+    # ------------------------------------------------------------------
+    # ConfigMaps
+    # ------------------------------------------------------------------
+    configmap:
+      config-overrides:
+        data:
+          production.yaml:
+            inline: |-
+              logs:
+                enableConsole: true
+          # Go service logging overrides for container stdout/stderr.
+          # Service DB settings come from /data/*/ws/config.props DB secrets.
+          ulp-go.config.props:
+            inline: |-
+              log.std = true
+              log.redirect_std_output = false
+              log.std_to_file.enable = false
+          ucs-agent.config.props:
+            inline: |-
+              log.std = true
+              log.redirect_std_output = false
+              log.std_to_file.enable = false
+          unifi-directory.config.props:
+            inline: |-
+              log.std = true
+              log.redirect_std_output = false
+              log.std_to_file.enable = false
+          unifi-identity-update.config.props:
+            inline: |-
+              log.std = true
+              log.file = false
+              log.redirect_std_output = false
+          uid-agent.config.props:
+            inline: |-
+              log.std = true
+              log.redirect_std_output = false
+              log.std_to_file.enable = false
+          unifi-credential-server.config.props:
+            inline: |-
+              log.std = true
+              log.redirect_std_output = false
+              log.std_to_file.enable = false
+              identity.device.auth = false
+              identity.cloud.env = dev
+              identity.support_cloud_token =
+              cloud.env = dev
+          ucs-user-assets.config.props:
+            inline: |-
+              identity.cloud.env = dev
+              identity.support_cloud_token =
+              identity.device.auth = false
+              cloud.env = dev
+    # ------------------------------------------------------------------
+    # Services
+    # ------------------------------------------------------------------
+    service:
+      # Primary ClusterIP — HTTP/HTTPS application ports consumed by ingress.
+      http:
+        enabled: true
+        type: ClusterIP
+        selector:
+          app.kubernetes.io/component: monolith
+        ports:
+          # Default UniFi OS HTTPS site served by unifi-core/nginx.
+          # This listener serves /, /manage, /proxy/network, etc.
+          https:
+            port: 443
+            protocol: TCP
+            name: https
+          # Device and application communication (inform URL)
+          inform:
+            port: 8080
+            protocol: TCP
+            name: inform
+          # UniFi Network Application GUI/API
+          network-app:
+            port: 8443
+            protocol: TCP
+            name: network-app
+          # UniFi Identity Hub
+          id-hub:
+            port: 9543
+            protocol: TCP
+            name: id-hub
+          # Site Supervisor
+          site-supervisor:
+            port: 11084
+            protocol: TCP
+            name: site-supervisor
+          # UniFi mobile speed test
+          speedtest:
+            port: 6789
+            protocol: TCP
+            name: speedtest
+          # Secure Hotspot portal
+          hotspot-secure:
+            port: 8444
+            protocol: TCP
+            name: hotspot-secure
+          # RTP control
+          rtp:
+            port: 5005
+            protocol: TCP
+            name: rtp
+      # Hotspot portal redirect ports — separate service so they can be
+      # mapped through the ingress TCP config independently.
+      hotspot:
+        enabled: true
+        type: ClusterIP
+        selector:
+          app.kubernetes.io/component: monolith
+        ports:
+          redirect-0:
+            port: 8880
+            protocol: TCP
+            name: redirect-0
+          redirect-1:
+            port: 8881
+            protocol: TCP
+            name: redirect-1
+          redirect-2:
+            port: 8882
+            protocol: TCP
+            name: redirect-2
+      # UDP ports — expose these through your cluster edge (Gateway API,
+      # ingress controller TCP/UDP mappings, LoadBalancer, or NodePort).
+      udp:
+        enabled: true
+        type: ClusterIP
+        selector:
+          app.kubernetes.io/component: monolith
+        ports:
+          # STUN — required for device adoption and Remote Management
+          stun:
+            port: 3478
+            protocol: UDP
+            name: stun
+          # Remote syslog capture
+          syslog:
+            port: 5514
+            protocol: UDP
+            name: syslog
+          # Device discovery during adoption
+          discovery:
+            port: 10003
+            protocol: UDP
+            name: discovery
+    # ------------------------------------------------------------------
+    # Gateway API / Istio routing objects
+    # ------------------------------------------------------------------
+    httproute:
+      unifi-https:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.enabled }}
+        hostnames: _HT!{{ list (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.hostname }}
+        parentRefs:
+          private:
+            kind: Gateway
+            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
+            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
+            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.sectionName }}
+        rules:
+          default:
+            backendRefs:
+              http:
+                name: http
+                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.backendPort }}
+    tcproute:
+      unifi-http-8080:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.tcpRoute.enabled }}
+        parentRefs:
+          private:
+            kind: Gateway
+            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
+            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
+            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.tcpRoute.sectionName }}
+        rules:
+          default:
+            backendRefs:
+              http:
+                name: http
+                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.tcpRoute.backendPort }}
+    udproute:
+      unifi-ap-discovery:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.discovery.enabled }}
+        parentRefs:
+          private:
+            kind: Gateway
+            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
+            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
+            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.discovery.sectionName }}
+        rules:
+          default:
+            backendRefs:
+              udp:
+                name: udp
+                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.discovery.backendPort }}
+      unifi-stun:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.stun.enabled }}
+        parentRefs:
+          private:
+            kind: Gateway
+            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
+            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
+            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.stun.sectionName }}
+        rules:
+          default:
+            backendRefs:
+              udp:
+                name: udp
+                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.stun.backendPort }}
+      unifi-remote-syslog:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.syslog.enabled }}
+        parentRefs:
+          private:
+            kind: Gateway
+            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
+            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
+            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.syslog.sectionName }}
+        rules:
+          default:
+            backendRefs:
+              udp:
+                name: udp
+                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.syslog.backendPort }}
+    customresource:
+      unifi-tls:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.enabled }}
+        apiVersion: networking.istio.io/v1
+        kind: DestinationRule
+        spec:
+          host: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.host }}
+          trafficPolicy:
+            portLevelSettings:
+              - port:
+                  number: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.port }}
+                tls:
+                  mode: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.tls.mode }}
+                  insecureSkipVerify: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.tls.insecureSkipVerify }}
+    # ------------------------------------------------------------------
+    # Secrets
+    # ------------------------------------------------------------------
+    secret:
+      mongodb-password:
+        enabled: _HT!{{ not (include "unifi-os.mongodbUseExistingSecret" (index . "PARENT_CONTEXT") | trim) }}
+        staticName: true
+        metadataNameOverride: mongodb-password
+        type: Opaque
+        stringData:
+          password: _HT!{{ include "unifi-os.mongodbPassword" (index . "PARENT_CONTEXT") }}
+      rabbitmq-auth:
+        enabled: _HT!{{ not (include "unifi-os.rabbitmqUseExistingSecret" (index . "PARENT_CONTEXT") | trim) }}
+        staticName: true
+        metadataNameOverride: rabbitmq-auth
+        type: Opaque
+        stringData:
+          password: _HT!{{ include "unifi-os.rabbitmqPassword" (index . "PARENT_CONTEXT") }}
+          erlang-cookie: _HT!{{ include "unifi-os.rabbitmqErlangCookie" (index . "PARENT_CONTEXT") }}
+      unifi-pg-auth:
+        enabled: _HT!{{ not (include "unifi-os.postgresUseExistingSecret" (index . "PARENT_CONTEXT") | trim) }}
+        staticName: true
+        type: kubernetes.io/basic-auth
+        stringData:
+          username: unifi-core
+          password: _HT!{{ include "unifi-os.postgresPassword" (index . "PARENT_CONTEXT") }}
+    # ------------------------------------------------------------------
+    # StatefulSet — single-container systemd runtime (Postgres/Mongo/RMQ external).
+    # ------------------------------------------------------------------
+    statefulset:
+      monolith:
+        enabled: true
+        replicas: 1
+        volumeClaimTemplates:
+          - metadata:
+              name: persistent
+            spec:
+              accessModes: [ReadWriteOnce]
+              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
+              resources:
+                requests:
+                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.persistent | quote }}
+          - metadata:
+              name: data
+            spec:
+              accessModes: [ReadWriteOnce]
+              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
+              resources:
+                requests:
+                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.data | quote }}
+          - metadata:
+              name: srv
+            spec:
+              accessModes: [ReadWriteOnce]
+              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
+              resources:
+                requests:
+                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.srv | quote }}
+          - metadata:
+              name: unifi
+            spec:
+              accessModes: [ReadWriteOnce]
+              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
+              resources:
+                requests:
+                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.unifi | quote }}
+          - metadata:
+              name: log
+            spec:
+              accessModes: [ReadWriteOnce]
+              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
+              resources:
+                requests:
+                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.log | quote }}
+        pod:
+          securityContext: {}
+          volumes:
+            run:
+              emptyDir:
+                medium: Memory
+            run-lock:
+              emptyDir:
+                medium: Memory
+            cgroup:
+              hostPath:
+                path: /sys/fs/cgroup
+                type: Directory
+            override-config-secrets:
+              projected:
+                sources:
+                  - secret:
+                      name: postgres-unifi-core-override
+                      items:
+                        - key: local.yaml
+                          path: unifi-core/local.yaml
+                  - configMap:
+                      name: config-overrides
+                      items:
+                        - key: production.yaml
+                          path: unifi-core/production.yaml
+                        - key: ulp-go.config.props
+                          path: ulp-go/logging.config.props
+                        - key: unifi-credential-server.config.props
+                          path: unifi-credential-server/logging.config.props
+                        - key: ucs-user-assets.config.props
+                          path: ucs-user-assets/logging.config.props
+                        - key: unifi-directory.config.props
+                          path: unifi-directory/logging.config.props
+                        - key: ucs-agent.config.props
+                          path: ucs-agent/logging.config.props
+                        - key: unifi-identity-update.config.props
+                          path: unifi-identity-update/logging.config.props
+                        - key: uid-agent.config.props
+                          path: uid/logging.config.props
+                  - secret:
+                      name: config-override-secret-ulp-go
+                      items:
+                        - key: config.props
+                          path: ulp-go/db.config.props
+                  - secret:
+                      name: config-override-secret-unifi-credential-server
+                      items:
+                        - key: config.props
+                          path: unifi-credential-server/db.config.props
+                  - secret:
+                      name: config-override-secret-ucs-user-assets
+                      items:
+                        - key: config.props
+                          path: ucs-user-assets/db.config.props
+                  - secret:
+                      name: config-override-secret-unifi-directory
+                      items:
+                        - key: config.props
+                          path: unifi-directory/db.config.props
+                  - secret:
+                      name: config-override-secret-ucs-agent
+                      items:
+                        - key: config.props
+                          path: ucs-agent/db.config.props
+                  - secret:
+                      name: config-override-secret-unifi-identity-update
+                      items:
+                        - key: config.props
+                          path: unifi-identity-update/db.config.props
+                  - secret:
+                      name: config-override-secret-uid-agent
+                      items:
+                        - key: config.props
+                          path: uid/db.config.props
+            postgres-superuser-auth:
+              enabled: true
+              secret:
+                secretName: _HT!{{ printf "%s-superuser" ((index . "PARENT_CONTEXT").Values.postgres.clusterName | default "unifi-postgres") }}
+          initContainers:
+            wait-postgres:
+              enabled: true
+              image:
+                repository: busybox
+              env:
+                PGHOST:
+                  value: _HT!{{ include "unifi-os.postgresHost" (index . "PARENT_CONTEXT") }}
+                PGPORT:
+                  value: "5432"
+              command:
+                - sh
+                - -c
+                - until nc -z -w 2 "$PGHOST" "${PGPORT:-5432}"; do sleep 2; done
+            init:
+              image:
+                repository: _HT!{{ (index . "PARENT_CONTEXT").Values.image.repository | quote }}
+                tag: _HT!{{ (index . "PARENT_CONTEXT").Values.image.tag | quote }}
+              env:
+                UOS_UUID:
+                  value: "3403e723-3f5b-5a1e-9b88-ed7e2fcfd762"
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -e
+                  export USER=unifi-core GROUP=unifi-core
+                  /usr/share/unifi-core/app/hooks/pre-start 2>/dev/null || true
+                  mkdir -p \
+                    /data/unifi-core/config/http \
+                    /data/unifi-core/config/overrides \
+                    /data/unifi-core/logs \
+                    /data/ulp-go/ws \
+                    /data/unifi-credential-server/ws \
+                    /data/unifi-directory/ws \
+                    /data/ucs-agent/ws \
+                    /data/uid/ws \
+                    /data/unifi-identity-update/ws \
+                    /data/ucs-user-assets/ws \
+                    /srv/unifi-core \
+                    /persistent
+                  _tls_dir=/data/unifi-core/config
+                  _tls_crt="${_tls_dir}/unifi-core.crt"
+                  _tls_key="${_tls_dir}/unifi-core.key"
+                  _tls_ca="${_tls_dir}/unifi-core-ca.crt"
+                  if [ ! -s "${_tls_crt}" ] || [ ! -s "${_tls_key}" ]; then
+                    rm -f "${_tls_crt}" "${_tls_key}"
+                    openssl req -x509 -newkey rsa:2048 -nodes \
+                      -keyout "${_tls_key}" \
+                      -out "${_tls_crt}" \
+                      -days 3650 \
+                      -subj "/CN=unifi.local" >/dev/null 2>&1 || true
+                    [ -s "${_tls_crt}" ] && [ ! -s "${_tls_ca}" ] && cp "${_tls_crt}" "${_tls_ca}" || true
+                    chown "$USER:$GROUP" "${_tls_crt}" "${_tls_key}" "${_tls_ca}" 2>/dev/null || true
+                    chmod 600 "${_tls_key}" 2>/dev/null || true
+                  fi
+                  # Copy overrides from read-only projected secrets into writable /data.
+                  # Service pre-start scripts chown these files, so they cannot stay read-only mounts.
+                  if [ -f /run/secrets/overrides/unifi-core/local.yaml ]; then
+                    cp /run/secrets/overrides/unifi-core/local.yaml /data/unifi-core/config/overrides/local.yaml
+                    chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
+                  fi
+                  if [ -f /run/secrets/overrides/unifi-core/production.yaml ]; then
+                    cp /run/secrets/overrides/unifi-core/production.yaml /data/unifi-core/config/overrides/production.yaml
+                    chown "$USER:$GROUP" /data/unifi-core/config/overrides/production.yaml 2>/dev/null || true
+                  fi
+                  for _entry in \
+                    "ulp-go|/data/ulp-go/ws/config.props" \
+                    "unifi-credential-server|/data/unifi-credential-server/ws/config.props" \
+                    "ucs-user-assets|/data/ucs-user-assets/ws/config.props" \
+                    "unifi-directory|/data/unifi-directory/ws/config.props" \
+                    "ucs-agent|/data/ucs-agent/ws/config.props" \
+                    "unifi-identity-update|/data/unifi-identity-update/ws/config.props" \
+                    "uid|/data/uid/ws/config.props"; do
+                    _svc="${_entry%%|*}"
+                    _dst="${_entry#*|}"
+                    _db_src="/run/secrets/overrides/${_svc}/db.config.props"
+                    _log_src="/run/secrets/overrides/${_svc}/logging.config.props"
+                    if [ -f "${_db_src}" ]; then
+                      cp "${_db_src}" "${_dst}"
+                    fi
+                    if [ -f "${_log_src}" ]; then
+                      [ -f "${_dst}" ] && printf '\n' >> "${_dst}" || true
+                      cat "${_log_src}" >> "${_dst}"
+                    fi
+                    [ -f "${_dst}" ] && chown "$USER:$GROUP" "${_dst}" 2>/dev/null || true
+                  done
+                  [ -n "${UOS_UUID}" ] && [ ! -f /data/uos_uuid ] && echo "${UOS_UUID}" > /data/uos_uuid || true
+                  cp /usr/share/unifi-core/http/ssl-nist.conf /data/unifi-core/config/http/ssl-dynamic.conf || true
+              volumeMounts:
+                data:
+                  name: data
+                  mountPath: /data
+                srv:
+                  name: srv
+                  mountPath: /srv
+                persistent:
+                  name: persistent
+                  mountPath: /persistent
+                override-config-secrets:
+                  name: override-config-secrets
+                  mountPath: /run/secrets/overrides
+                  readOnly: true
+          containers:
+            unifi-os:
+              image:
+                repository: _HT!{{ (index . "PARENT_CONTEXT").Values.image.repository | quote }}
+                tag: _HT!{{ (index . "PARENT_CONTEXT").Values.image.tag | quote }}
+              imagePullPolicy: Always
+              securityContext:
+                privileged: true
+                runAsUser: 0
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -xe
+                  # Set global Postgres env for systemd-managed services that rely on libpq defaults.
+                  mkdir -p /etc/systemd/system.conf.d
+                  cat >/etc/systemd/system.conf.d/10-postgres-env.conf <<EOF
+                  [Manager]
+                  DefaultEnvironment=PGHOST=${PGHOST} PGPORT=${PGPORT}
+                  EOF
+                  # Wrapper scripts and unit stubs are baked into the image.
+                  mkdir -p /var/log/nginx
+                  mkdir -p /var/lib/unifi
+                  cat >/var/lib/unifi/env-overrides <<EOF
+                  UNIFI_MQ_ENABLED=true
+                  UNIFI_MONGODB_SERVICE_ENABLED=false
+                  MONGO_URI=${MONGO_URI}
+                  RABBITMQ_URI=${RABBITMQ_URI}
+                  EOF
+                  # Run systemd as PID 1 so bundled UniFi services are managed
+                  # by their native unit files inside the monolith container.
+                  exec /sbin/init
+              env:
+                UOS_SYSTEM_IP:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.uosSystemIP | default "" }}
+                PGHOST:
+                  value: _HT!{{ include "unifi-os.postgresHost" (index . "PARENT_CONTEXT") }}
+                PGPORT:
+                  value: _HT!{{ include "unifi-os.postgresPort" (index . "PARENT_CONTEXT") }}
+                MONGO_PASSWORD:
+                  valueFrom:
+                    secretKeyRef:
+                      name: _HT!{{ include "unifi-os.mongodbSecretName" (index . "PARENT_CONTEXT") }}
+                      key: _HT!{{ include "unifi-os.mongodbSecretPasswordKey" (index . "PARENT_CONTEXT") }}
+                MONGO_URI:
+                  value: _HT!{{ include "unifi-os.mongoURI" (index . "PARENT_CONTEXT") }}
+                RABBITMQ_PASSWORD:
+                  valueFrom:
+                    secretKeyRef:
+                      name: _HT!{{ include "unifi-os.rabbitmqSecretName" (index . "PARENT_CONTEXT") }}
+                      key: _HT!{{ include "unifi-os.rabbitmqSecretPasswordKey" (index . "PARENT_CONTEXT") }}
+                RABBITMQ_URI:
+                  value: _HT!{{ include "unifi-os.rabbitmqURI" (index . "PARENT_CONTEXT") }}
+              ports:
+                inform:
+                  containerPort: 8080
+                  protocol: TCP
+                network-app:
+                  containerPort: 8443
+                  protocol: TCP
+                id-hub:
+                  containerPort: 9543
+                  protocol: TCP
+                site-supervisor:
+                  containerPort: 11084
+                  protocol: TCP
+                speedtest:
+                  containerPort: 6789
+                  protocol: TCP
+                hotspot-secure:
+                  containerPort: 8444
+                  protocol: TCP
+                rtp:
+                  containerPort: 5005
+                  protocol: TCP
+                redirect-0:
+                  containerPort: 8880
+                  protocol: TCP
+                redirect-1:
+                  containerPort: 8881
+                  protocol: TCP
+                redirect-2:
+                  containerPort: 8882
+                  protocol: TCP
+                stun:
+                  containerPort: 3478
+                  protocol: UDP
+                syslog:
+                  containerPort: 5514
+                  protocol: UDP
+                discovery:
+                  containerPort: 10003
+                  protocol: UDP
+              readinessProbe:
+                httpGet:
+                  scheme: HTTPS
+                  path: /
+                  port: 443
+                initialDelaySeconds: 90
+                periodSeconds: 15
+                timeoutSeconds: 5
+                successThreshold: 1
+                failureThreshold: 6
+              livenessProbe:
+                httpGet:
+                  scheme: HTTPS
+                  path: /
+                  port: 443
+                initialDelaySeconds: 180
+                periodSeconds: 20
+                timeoutSeconds: 5
+                successThreshold: 1
+                failureThreshold: 6
+              volumeMounts:
+                data:
+                  name: data
+                  mountPath: /data
+                srv:
+                  name: srv
+                  mountPath: /srv
+                unifi:
+                  name: unifi
+                  mountPath: /var/lib/unifi
+                log:
+                  name: log
+                  mountPath: /var/log
+                persistent:
+                  name: persistent
+                  mountPath: /persistent
+                run:
+                  name: run
+                  mountPath: /run
+                run-lock:
+                  name: run-lock
+                  mountPath: /run/lock
+                cgroup:
+                  name: cgroup
+                  mountPath: /sys/fs/cgroup
+                postgres-superuser-auth:
+                  name: postgres-superuser-auth
+                  mountPath: /run/secrets/postgres-superuser/pgpass
+                  subPath: pgpass
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 2Gi
+                limits:
+                  cpu: 4000m
+                  memory: 8Gi
+            journalctl:
+              image:
+                repository: _HT!{{ (index . "PARENT_CONTEXT").Values.image.repository | quote }}
+                tag: _HT!{{ (index . "PARENT_CONTEXT").Values.image.tag | quote }}
+              imagePullPolicy: Always
+              securityContext:
+                runAsUser: 0
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -e
+                  # Wait for systemd to create journal files in shared volumes.
+                  # Without this, the sidecar can crash with "No journal files were found."
+                  while ! compgen -G "/run/log/journal/*/*.journal" > /dev/null \
+                    && ! compgen -G "/var/log/journal/*/*.journal" > /dev/null; do
+                    sleep 2
+                  done
+                  journal_dirs=()
+                  [ -d /run/log/journal ] && journal_dirs+=(--directory=/run/log/journal)
+                  [ -d /var/log/journal ] && journal_dirs+=(--directory=/var/log/journal)
+                  # Read all available journal files (including foreign machine-id dirs)
+                  # and follow new entries for kubectl logs -c journalctl.
+                  exec journalctl -f -o short-iso --no-pager --merge "${journal_dirs[@]}" | cut -c 27-
+              volumeMounts:
+                run:
+                  name: run
+                  mountPath: /run
+                log:
+                  name: log
+                  mountPath: /var/log
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+
+
+# ------------------------------------------------------------------
+# MongoDB
+# ------------------------------------------------------------------
+mongodb:
+  enabled: false # Subchart on/off; when false, set global.mongodb.connection.host for external
+  connection: {} # Optional overrides only; defaults in global.mongodb.connection
+  # Subchart config (CloudPirates) — when enabled; uses secret mongodb-password (we create or you create with that name)
+  auth:
+    enabled: true
+    existingSecret: "mongodb-password"
+    # CloudPirates MongoDB uses existingSecretPasswordKey (not existingPasswordKey).
+    existingSecretPasswordKey: password
+  # Replica set mode — REQUIRED when global.mongodb.connection.replicaSetName is set (default: rs0).
+  # The UniFi Network app's MongoDB Java driver requires a replica set when replicaSetName is non-empty.
+  # To use a standalone instance instead, set:
+  #   global.mongodb.connection.replicaSetName: ""
+  #   mongodb.replicaSet.enabled: false
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ------------------------------------------------------------------
+# RabbitMQ
+# ------------------------------------------------------------------
+rabbitmq:
+  enabled: true
+  connection: {} # Optional overrides only; defaults in global.rabbitmq.connection
+  # Subchart uses secret rabbitmq-auth (we create or you create with that name)
+  auth:
+    enabled: true
+    username: "unifi"
+    existingSecret: "rabbitmq-auth"
+    # CloudPirates RabbitMQ uses existingPasswordKey (not existingSecretPasswordKey).
+    existingPasswordKey: password
+    existingErlangCookieKey: erlang-cookie
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ------------------------------------------------------------------
+# PostgreSQL
+# ------------------------------------------------------------------
+postgres:
+  enabled: false
+  connection: {} # Optional overrides only; defaults in global.postgres.connection
+  clusterName: unifi-postgres
+  # No top-level auth block here; credentials come from global.postgres.connection
+  # and the chart-managed secret unifi-pg-auth/pg-login-* resources.
+  fullnameOverride: "unifi-postgres"
+  type: postgresql
+  version:
+    postgresql: "14"
+  cluster:
+    instances: 1
+    imageName: "ghcr.io/cloudnative-pg/postgresql:14-bookworm"
+    storage:
+      size: 10Gi
+      storageClass: ""
+    initdb:
+      database: unifi-core
+      owner: unifi-core
+      secret:
+        name: unifi-pg-auth
+    roles:
+      - name: unifi-core
+        ensure: present
+        login: true
+        passwordSecret:
+          name: pg-login-unifi-core
+        createdb: true
+      - name: ulp-go
+        ensure: present
+        login: true
+        passwordSecret:
+          name: pg-login-ulp-go
+        createdb: true
+      - name: uid
+        ensure: present
+        login: true
+        passwordSecret:
+          name: pg-login-uid
+        createdb: true
+      - name: unifi-credential-server
+        ensure: present
+        login: true
+        passwordSecret:
+          name: pg-login-unifi-credential-server
+        createdb: true
+      - name: unifi-directory
+        ensure: present
+        login: true
+        passwordSecret:
+          name: pg-login-unifi-directory
+        createdb: true
+      - name: ucs-agent
+        ensure: present
+        login: true
+        passwordSecret:
+          name: pg-login-ucs-agent
+        createdb: true
+      - name: ucs-update
+        ensure: present
+        login: true
+        passwordSecret:
+          name: pg-login-ucs-update
+        createdb: true
+      - name: unifi-identity-update
+        ensure: present
+        login: true
+        passwordSecret:
+          name: pg-login-unifi-identity-update
+        createdb: true
+  databases:
+    - name: unifi-core
+      owner: unifi-core
+    - name: ulp-go
+      owner: ulp-go
+    - name: uid
+      owner: uid
+    - name: unifi-credential-server
+      owner: unifi-credential-server
+    - name: ucs-user-assets
+      owner: unifi-credential-server
+    - name: unifi-directory
+      owner: unifi-directory
+    - name: ucs-agent
+      owner: ucs-agent
+    - name: unifi-identity-update
+      owner: ucs-update
+
+# ------------------------------------------------------------------
+# UniFi
+# ------------------------------------------------------------------
+unifi:
+  storage:
+    statefulset:
+      storageClassName: ""
+      sizes:
+        persistent: 10Gi
+        data: 10Gi
+        srv: 5Gi
+        unifi: 10Gi
+        log: 5Gi
+  configOverrides:
+    services:
+      - id: ulp-go
+        dbSecretName: config-override-secret-ulp-go
+        dbUser: ulp-go
+        dbName: ulp-go
+        targetPath: /data/ulp-go/ws/config.props
+        loggingKey: ulp-go.config.props
+      - id: unifi-credential-server
+        dbSecretName: config-override-secret-unifi-credential-server
+        dbUser: unifi-credential-server
+        dbName: unifi-credential-server
+        targetPath: /data/unifi-credential-server/ws/config.props
+        loggingKey: unifi-credential-server.config.props
+      - id: ucs-user-assets
+        dbSecretName: config-override-secret-ucs-user-assets
+        dbUser: unifi-credential-server
+        dbName: ucs-user-assets
+        targetPath: /data/ucs-user-assets/ws/config.props
+        loggingKey: ucs-user-assets.config.props
+      - id: unifi-directory
+        dbSecretName: config-override-secret-unifi-directory
+        dbUser: unifi-directory
+        dbName: unifi-directory
+        targetPath: /data/unifi-directory/ws/config.props
+        loggingKey: unifi-directory.config.props
+      - id: ucs-agent
+        dbSecretName: config-override-secret-ucs-agent
+        dbUser: ucs-agent
+        dbName: ucs-agent
+        targetPath: /data/ucs-agent/ws/config.props
+        loggingKey: ucs-agent.config.props
+      - id: unifi-identity-update
+        dbSecretName: config-override-secret-unifi-identity-update
+        dbUser: unifi-identity-update
+        dbName: unifi-identity-update
+        targetPath: /data/unifi-identity-update/ws/config.props
+        loggingKey: unifi-identity-update.config.props
+      - id: uid
+        dbSecretName: config-override-secret-uid-agent
+        dbUser: uid
+        dbName: uid
+        targetPath: /data/uid/ws/config.props
+        loggingKey: uid-agent.config.props
+  # Hostname or IP that UniFi devices use to reach the controller for set-inform.
+  # Set this to the externally reachable hostname or IP of the controller service.
+  # Example: "192.168.1.100" or "unifi.example.com"
+  # When empty, devices will not receive a stable inform URL.
+  uosSystemIP: ""
+  # Gateway API route configuration for Istio/Kubernetes Gateway API.
+  gateway:
+    parentRef:
+      name: ""
+      namespace: ""
+    httpRoute:
+      enabled: false
+      hostname: ""
+      sectionName: ""
+      backendPort: 443
+    tcpRoute:
+      enabled: false
+      sectionName: ""
+      backendPort: 8080
+    udpRoutes:
+      discovery:
+        enabled: false
+        sectionName: ""
+        backendPort: 10003
+      stun:
+        enabled: false
+        sectionName: ""
+        backendPort: 3478
+      syslog:
+        enabled: false
+        sectionName: ""
+        backendPort: 5514
+  # Optional Istio DestinationRule for ignoring Unifi's self signed certificates
+  istio:
+    destinationRule:
+      enabled: false
+      host: _HT!{{ printf "http.%s.svc.cluster.local" ((index . "PARENT_CONTEXT").Release.Namespace) }}
+      port: 443
+      tls:
+        mode: SIMPLE
+        insecureSkipVerify: true

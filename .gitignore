@@ -1,0 +1,10 @@
+charts/
+*.tgz
+Chart.lock
+
+override.yaml
+extracted/
+file-dumps/
+
+values.env.yaml
+install.sh
