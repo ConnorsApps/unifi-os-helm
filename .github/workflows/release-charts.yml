@@ -26,6 +26,36 @@ jobs:
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
+      - name: Sync chart README from repository README
+        run: |
+          cp README.md charts/unifi-os/README.md
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          readme_path = Path("charts/unifi-os/README.md")
+          text = readme_path.read_text(encoding="utf-8")
+          repo = os.environ["GITHUB_REPOSITORY"]
+          ref = os.environ.get("GITHUB_REF_NAME", "main")
+          base = f"https://github.com/{repo}/blob/{ref}/"
+
+          def rewrite(match):
+            label = match.group(1)
+            target = match.group(2)
+            if (
+              target.startswith(("http://", "https://", "mailto:", "#"))
+              or target.startswith("<")
+            ):
+              return match.group(0)
+            if target.startswith("/"):
+              target = target[1:]
+            return f"[{label}]({base}{target})"
+
+          text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", rewrite, text)
+          readme_path.write_text(text, encoding="utf-8")
+          PY
+
       - name: Add dependency repos
         run: |
           helm repo add hull https://vidispine.github.io/hull
