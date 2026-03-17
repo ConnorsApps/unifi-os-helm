@@ -1,0 +1,45 @@
+name: Sync README to GitHub Pages
+
+on:
+  workflow_run:
+    workflows:
+      - Release Helm Chart
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch: {}
+
+jobs:
+  sync-readme:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_branch || 'main' }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Update gh-pages index.md from README.md
+        run: |
+          git fetch origin gh-pages
+          git worktree add /tmp/gh-pages origin/gh-pages
+          cp README.md /tmp/gh-pages/index.md
+
+          if git -C /tmp/gh-pages diff --quiet -- index.md; then
+            echo "No README changes to publish"
+            exit 0
+          fi
+
+          git -C /tmp/gh-pages add index.md
+          git -C /tmp/gh-pages commit -m "docs: sync GitHub Pages landing content"
+          git -C /tmp/gh-pages push origin HEAD:gh-pages
