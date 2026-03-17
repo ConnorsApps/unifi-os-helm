@@ -33,9 +33,14 @@ jobs:
         run: |
           git fetch origin gh-pages
           git worktree add /tmp/gh-pages origin/gh-pages
+          had_index=false
+          if [ -f /tmp/gh-pages/index.md ]; then
+            had_index=true
+          fi
+
           cp README.md /tmp/gh-pages/index.md
 
-          if git -C /tmp/gh-pages diff --quiet -- index.md; then
+          if [ "$had_index" = "true" ] && git -C /tmp/gh-pages diff --quiet -- index.md; then
             echo "No README changes to publish"
             exit 0
           fi
