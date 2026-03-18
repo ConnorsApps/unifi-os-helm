@@ -95,7 +95,13 @@ RUN mkdir -p /bundle/rootfs/usr/lib \
          *)        echo -n "linux-$$(uname -m)" ;; \
        esac > /bundle/rootfs/usr/lib/platform
 
-RUN echo "UOSSERVER.0000000.${VERSION}.0000000.000000.0000" > /bundle/rootfs/usr/lib/version
+RUN set -eu \
+    && _version="${VERSION:-}" \
+    && if [ -z "${_version}" ]; then \
+         _version="$(printf '%s' "${UOS_INSTALLER_URL}" | sed -nE 's#.*-([0-9]+\.[0-9]+\.[0-9]+)-.*#\1#p')"; \
+       fi \
+    && [ -n "${_version}" ] || { echo "ERROR: VERSION build arg missing and unable to parse version from UOS_INSTALLER_URL"; exit 1; } \
+    && echo "UOSSERVER.0000000.${_version}.0000000.000000.0000" > /bundle/rootfs/usr/lib/version
 
 # Patch upstream nginx logging to container stdio without replacing the full file.
 RUN set -e \

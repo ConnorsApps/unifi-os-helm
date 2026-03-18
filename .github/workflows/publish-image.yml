@@ -73,4 +73,5 @@ jobs:
           tags: |
             ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.image_tag }}
           build-args: |
+            VERSION=${{ steps.vars.outputs.image_tag }}
             UOS_INSTALLER_URL=${{ steps.vars.outputs.uos_installer_url }}

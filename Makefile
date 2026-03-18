@@ -30,6 +30,7 @@ build:
 	@echo "Building $(IMAGE):$(TAG) for $(PLATFORMS)"
 	podman build . \
 		--platform "$(PLATFORMS)" \
+		--build-arg "VERSION=$(TAG)" \
 		--build-arg "UOS_INSTALLER_URL=$(UOS_INSTALLER_URL)" \
 		--tag "$(IMAGE):$(TAG)"
 
