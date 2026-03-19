@@ -93,15 +93,16 @@ chart dependencies or external endpoints.
 **Dependencies:**
 - Required: `network.target`
 - Runtime link: consumed by `unifi-core` on 11010/11011
+- Status: **stub binary** in the extracted image — `/usr/bin/uos-agent` does not send the `sd_notify` READY signal required by `Type=notify`, causing it to fail immediately.  A `Restart=no` drop-in prevents the restart storm.  `unifi-core` logs recurring `No connection to UOS Server Manager` errors as a result (non-fatal; app continues).
 
 ## uos-discovery-client
 
-**What it is:** Device discovery/adoption helper service.
+**What it is:** Device discovery/adoption helper service.  Provides the HTTP `/scan` endpoint on port 11002 that `unifi-core` uses to enumerate network interfaces and resolve the LAN IP.
 
 **Dependencies:**
 - Required: `network.target`
 - Ordering: before `unifi-core` when enabled
-- Status: disabled by default in extracted image
+- Status: **stub binary** in the extracted image — `/usr/bin/uos-discovery-client` prints "Stub package" and exits immediately; disabled by default.  A `Restart=no` drop-in prevents the restart storm that would otherwise occur.  Port 11002 is never served; `unifi-core` logs recurring `Failed to fetch network interfaces` warnings as a result (non-fatal).
 
 ## unifi-identity-update
 

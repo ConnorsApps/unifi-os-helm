@@ -132,6 +132,20 @@ hull:
               identity.device.auth = false
               cloud.env = dev
     # ------------------------------------------------------------------
+      # ------------------------------------------------------------------
+      # Backup — non-sensitive config rendered from backup.config values.
+      # password and storageUrl are kept in the unifi-backup-secret Secret.
+      # ------------------------------------------------------------------
+      unifi-backup-config:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.enabled }}
+        data:
+          config.yaml:
+            inline: |
+              {{- $cfg := deepCopy .Values.backup.config -}}
+              {{- $url := .Values.backup.config.unifi.url | default (printf "https://http.%s.svc.cluster.local" .Release.Namespace) -}}
+              {{- $_ := set $cfg.unifi "url" $url -}}
+              {{ $cfg | toYaml -}}
+    # ------------------------------------------------------------------
     # Services
     # ------------------------------------------------------------------
     service:
@@ -226,6 +240,18 @@ hull:
             port: 10003
             protocol: UDP
             name: discovery
+      # Metrics endpoint for the optional UniFi exporter.
+      unifi-exporter:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.enabled }}
+        type: ClusterIP
+        selector:
+          app.kubernetes.io/component: unifi-exporter
+        ports:
+          metrics:
+            port: 9130
+            targetPort: metrics
+            name: metrics
+            protocol: TCP
     # ------------------------------------------------------------------
     # Gateway API / Istio routing objects
     # ------------------------------------------------------------------
@@ -318,6 +344,21 @@ hull:
                   mode: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.tls.mode }}
                   insecureSkipVerify: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.tls.insecureSkipVerify }}
     # ------------------------------------------------------------------
+    # ServiceMonitor — opt-in Prometheus scrape config for UniFi exporter.
+    # Requires the Prometheus Operator CRDs to be installed.
+    # ------------------------------------------------------------------
+    servicemonitor:
+      unifi-exporter:
+        enabled: _HT!{{ and ((index . "PARENT_CONTEXT").Values.unifiExporter.enabled) ((index . "PARENT_CONTEXT").Values.unifiExporter.serviceMonitor.enabled) }}
+        selector:
+          matchLabels:
+            app.kubernetes.io/component: unifi-exporter
+        endpoints:
+          - port: metrics
+            path: /metrics
+            interval: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.serviceMonitor.interval | quote }}
+            scrapeTimeout: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.serviceMonitor.scrapeTimeout | quote }}
+    # ------------------------------------------------------------------
     # Secrets
     # ------------------------------------------------------------------
     secret:
@@ -343,6 +384,19 @@ hull:
         stringData:
           username: unifi-core
           password: _HT!{{ include "unifi-os.postgresPassword" (index . "PARENT_CONTEXT") }}
+      # Backup credentials — created only when backup.existingSecret.name is not set.
+      unifi-backup-secret:
+        enabled: _HT!{{ and ((index . "PARENT_CONTEXT").Values.backup.enabled) (not ((index . "PARENT_CONTEXT").Values.backup.existingSecret.name)) }}
+        type: Opaque
+        stringData:
+          password: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.password }}
+          storageUrl: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.storageUrl }}
+      # Exporter credentials — created only when unifiExporter.existingSecret.name is not set.
+      unifi-exporter-secret:
+        enabled: _HT!{{ and ((index . "PARENT_CONTEXT").Values.unifiExporter.enabled) (not ((index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name)) }}
+        type: Opaque
+        stringData:
+          password: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.password }}
     # ------------------------------------------------------------------
     # StatefulSet — single-container systemd runtime (Postgres/Mongo/RMQ external).
     # ------------------------------------------------------------------
@@ -762,6 +816,222 @@ hull:
                   cpu: 250m
                   memory: 256Mi
 
+
+    # ------------------------------------------------------------------
+    # UniFi Exporter Deployment — https://github.com/unpoller/unpoller
+    # ------------------------------------------------------------------
+    deployment:
+      unifi-exporter:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.enabled }}
+        replicas: 1
+        pod:
+          containers:
+            main:
+              image:
+                repository: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.image.repository | quote }}
+                tag: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.image.tag | quote }}
+              imagePullPolicy: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.image.pullPolicy | quote }}
+              ports:
+                metrics:
+                  containerPort: 9130
+                  protocol: TCP
+              env:
+                UP_UNIFI_DEFAULT_URL:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.url | default (printf "https://http.%s.svc.cluster.local:8443" ((index . "PARENT_CONTEXT").Release.Namespace)) | quote }}
+                UP_UNIFI_DEFAULT_USER:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.username | quote }}
+                UP_UNIFI_DEFAULT_PASS:
+                  valueFrom:
+                    secretKeyRef:
+                      name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
+                      key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.passwordKey | quote }}
+                UP_PROMETHEUS_DISABLE:
+                  value: "false"
+                UP_UNIFI_DEFAULT_VERIFY_SSL:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.verifyTLS | toString | quote }}
+                UP_INFLUXDB_DISABLE:
+                  value: "true"
+                UP_UNIFI_DEFAULT_SAVE_SITES:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveSites | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_DPI:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveDpi | toString | quote }}
+                UP_PROMETHEUS_REPORT_ERRORS:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.reportErrors | toString | quote }}
+              resources:
+                requests:
+                  cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.resources.requests.cpu | quote }}
+                  memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.resources.requests.memory | quote }}
+                limits:
+                  cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.resources.limits.cpu | quote }}
+                  memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.resources.limits.memory | quote }}
+              livenessProbe:
+                httpGet:
+                  path: /
+                  port: metrics
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                timeoutSeconds: 5
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /
+                  port: metrics
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                timeoutSeconds: 3
+                failureThreshold: 3
+    # ------------------------------------------------------------------
+    # Backup CronJob — https://github.com/ConnorsApps/unifi-backup
+    # ------------------------------------------------------------------
+    cronjob:
+      unifi-backup:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.enabled }}
+        schedule: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.schedule | quote }}
+        successfulJobsHistoryLimit: 3
+        failedJobsHistoryLimit: 3
+        concurrencyPolicy: Forbid
+        job:
+          pod:
+            restartPolicy: OnFailure
+            containers:
+              backup:
+                image:
+                  repository: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.image.repository | quote }}
+                  tag: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.image.tag | quote }}
+                imagePullPolicy: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.image.pullPolicy | quote }}
+                args:
+                  - "-config"
+                  - "/config/config.yaml"
+                env:
+                  UNIFI_PASS:
+                    valueFrom:
+                      secretKeyRef:
+                        name: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.existingSecret.name | default "unifi-backup-secret" }}
+                        key: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.existingSecret.passwordKey }}
+                  UNIFI_USER:
+                    value: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.username }}
+                  STORAGE_URL:
+                    valueFrom:
+                      secretKeyRef:
+                        name: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.existingSecret.name | default "unifi-backup-secret" }}
+                        key: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.existingSecret.storageUrlKey }}
+                volumeMounts:
+                  config:
+                    name: config
+                    mountPath: /config
+                    readOnly: true
+                resources:
+                  requests:
+                    memory: "64Mi"
+                    cpu: "100m"
+                  limits:
+                    memory: "256Mi"
+            volumes:
+              config:
+                configMap:
+                  name: unifi-backup-config
+
+# ------------------------------------------------------------------
+# Backup — uses https://github.com/ConnorsApps/unifi-backup
+# Requires a Local UniFi OS user with Administrator role.
+# See https://github.com/ConnorsApps/unifi-backup/blob/main/CONFIGURATION.md
+# ------------------------------------------------------------------
+backup:
+  enabled: false
+
+  schedule: "0 2 * * *"
+
+  image:
+    repository: ghcr.io/connorsapps/unifi-backup
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  # Password for the backup UniFi OS local user (Administrator role required).
+  # Set in values.env.yaml. Ignored when existingSecret.name is set.
+  password: ""
+
+  username: backup
+
+  # Storage backend URL — kept as a Secret because it often contains credentials.
+  # Injected as STORAGE_URL env var (takes priority over config file).
+  # See https://github.com/ConnorsApps/unifi-backup/blob/main/CONFIGURATION.md
+  # Examples:
+  #   file://./backups
+  #   smb://user:pass@nas.local/share
+  #   s3://my-bucket?region=us-east-1
+  storageUrl: "file://./backups"
+
+  # Reference a pre-existing Secret instead of creating one from password/storageUrl above.
+  # Secret must contain the keys specified by *Key fields.
+  existingSecret:
+    name: ""
+    passwordKey: password
+    storageUrlKey: storageUrl
+
+  # Non-sensitive backup configuration — rendered as config.yaml in a ConfigMap.
+  # Docs: https://github.com/ConnorsApps/unifi-backup/blob/main/examples/config.example.yaml
+  #       https://github.com/ConnorsApps/unifi-backup/blob/main/CONFIGURATION.md
+  config:
+    # yaml-language-server: $schema=https://raw.githubusercontent.com/ConnorsApps/unifi-backup/refs/heads/main/config.schema.json
+    unifi:
+      # Leave empty to auto-use the cluster-local service address:
+      # https://http.<namespace>.svc.cluster.local
+      url: ""
+      site: default
+      includeDays: 0
+      insecure_skip_verify: true
+      timeout: 10m
+      max_retries: 3
+    logging:
+      level: info
+      format: json
+    retention:
+      keepLast: 14
+
+# ------------------------------------------------------------------
+# UniFi Exporter — uses https://github.com/unpoller/unpoller
+# Scrapes metrics from UniFi OS and exposes them for Prometheus.
+# Requires a local read-only UniFi OS user.
+# ------------------------------------------------------------------
+unifiExporter:
+  enabled: false
+
+  image:
+    repository: ghcr.io/unpoller/unpoller
+    tag: "v2.34.0"
+    pullPolicy: IfNotPresent
+
+  config:
+    # UniFi OS controller URL.
+    # Leave empty to auto-derive: https://http.<namespace>.svc.cluster.local:8443
+    url: ""
+    username: ""
+    # Ignored when existingSecret.name is set.
+    password: ""
+    verifyTLS: false
+    saveSites: true
+    saveDpi: true
+    reportErrors: true
+
+  # Reference a pre-existing Secret instead of creating one from config.password above.
+  # Secret must contain the key specified by passwordKey.
+  existingSecret:
+    name: ""
+    passwordKey: password
+
+  serviceMonitor:
+    # Requires the Prometheus Operator CRDs to be installed.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
 
 # ------------------------------------------------------------------
 # MongoDB

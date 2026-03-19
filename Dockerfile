@@ -67,6 +67,25 @@ RUN set -e \
     && skopeo copy "$SRC" "oci:/tmp/oci:uosserver:uosserver" \
     && umoci unpack --image /tmp/oci:uosserver:uosserver /bundle
 
+# Linux Kubernetes pods usually do not resolve host.docker.internal.
+# Point unifi-core discovery client at localhost inside the container.
+RUN sed -i 's|host\.docker\.internal|localhost|g' \
+    /bundle/rootfs/etc/default/unifi-core_advanced
+
+# uos-discovery-client and uos-agent ship as stub binaries in the extracted
+# image — they exit immediately (printing "Stub package") without providing
+# any real functionality.  Both units use Restart=always + StartLimitIntervalSec=0
+# which causes a tight restart storm that fills the journal with noise.
+# Drop-in overrides suppress the restart loop.  uos-discovery-client is also
+# disabled by default; keep it disabled since the stub never serves port 11002.
+RUN mkdir -p \
+         /bundle/rootfs/etc/systemd/system/uos-discovery-client.service.d \
+         /bundle/rootfs/etc/systemd/system/uos-agent.service.d \
+    && printf '[Service]\nRestart=no\n' \
+         > /bundle/rootfs/etc/systemd/system/uos-discovery-client.service.d/no-restart.conf \
+    && printf '[Service]\nRestart=no\n' \
+         > /bundle/rootfs/etc/systemd/system/uos-agent.service.d/no-restart.conf
+
 # Generate /entrypoint.sh from the OCI runtime config.
 RUN set -e \
     && echo "=== OCI process config ===" \
