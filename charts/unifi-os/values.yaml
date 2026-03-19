@@ -131,7 +131,65 @@ hull:
               identity.support_cloud_token =
               identity.device.auth = false
               cloud.env = dev
-    # ------------------------------------------------------------------
+      # ------------------------------------------------------------------
+      # Discovery shim sidecar script
+      #
+      # uos-discovery-client ships as a stub binary that exits immediately,
+      # so nothing ever listens on port 11002 (discoveryClientUrl). unifi-core
+      # polls that port on a tight setIntervalAsync loop and logs two recurring
+      # warnings every few seconds:
+      #   [system] Failed to fetch network interfaces from discovery agent
+      #   [discovery.client] Error on client scan: ECONNREFUSED 127.0.0.1:11002
+      #
+      # This shim is a minimal Node.js HTTP server that satisfies those calls:
+      #   GET /scan         → [] (no devices — no UDP broadcast in a k8s pod)
+      #   GET <anything>    → os.networkInterfaces() in the shape $Je() expects,
+      #                       giving unifi-core a chance to resolve its lanIp
+      #   HEAD /healthz     → 200 OK
+      # ------------------------------------------------------------------
+      discovery-shim-script:
+        data:
+          shim.js:
+            inline: |-
+              const http = require("http");
+              const os = require("os");
+
+              const PORT = Number(process.env.DISCOVERY_SHIM_PORT || 11002);
+              const HOST = process.env.DISCOVERY_SHIM_HOST || "0.0.0.0";
+
+              function writeJson(res, statusCode, body) {
+                res.statusCode = statusCode;
+                res.setHeader("Content-Type", "application/json");
+                res.end(JSON.stringify(body));
+              }
+
+              const server = http.createServer((req, res) => {
+                const method = req.method || "GET";
+                const url = req.url || "/";
+
+                if (method === "HEAD" && (url === "/" || url === "/healthz")) {
+                  res.statusCode = 200;
+                  return res.end();
+                }
+
+                if (url.startsWith("/scan")) {
+                  // discovery.client scan — no UDP broadcast domain in a k8s pod
+                  return writeJson(res, 200, []);
+                }
+
+                if (method === "GET") {
+                  // unifi-core validates this response with ZodRecord, which expects a
+                  // plain object keyed by interface name — exactly what os.networkInterfaces()
+                  // returns: { "eth0": [{address, netmask, ...}], "lo": [...] }
+                  return writeJson(res, 200, os.networkInterfaces());
+                }
+
+                return writeJson(res, 404, {});
+              });
+
+              server.listen(PORT, HOST, () => {
+                console.log(`discovery-shim listening on ${HOST}:${PORT}`);
+              });
       # ------------------------------------------------------------------
       # Backup — non-sensitive config rendered from backup.config values.
       # password and storageUrl are kept in the unifi-backup-secret Secret.
@@ -520,6 +578,10 @@ hull:
                       items:
                         - key: config.props
                           path: uid/db.config.props
+            discovery-shim-script:
+              configMap:
+                name: discovery-shim-script
+                defaultMode: 0755
             postgres-superuser-auth:
               enabled: true
               secret:
@@ -815,7 +877,26 @@ hull:
                 limits:
                   cpu: 250m
                   memory: 256Mi
-
+            discovery-shim:
+              image:
+                repository: node
+                tag: "24-alpine"
+              imagePullPolicy: IfNotPresent
+              command:
+                - node
+                - --watch
+                - /scripts/shim.js
+              volumeMounts:
+                discovery-shim-script:
+                  name: discovery-shim-script
+                  mountPath: /scripts
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
 
     # ------------------------------------------------------------------
     # UniFi Exporter Deployment — https://github.com/unpoller/unpoller
