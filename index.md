@@ -1,16 +1,23 @@
 # UniFi OS Server — Kubernetes Helm Chart
 
-A Helm chart that runs Ubiquiti's UniFi OS Server in a single Kubernetes
-container. The upstream runtime model (systemd managing ~15 tightly coupled
-services) is kept intact while PostgreSQL, MongoDB, and RabbitMQ are exposed as
-explicit, replaceable dependencies. Each dependency can be toggled between a
-bundled subchart and an externally-managed instance.
+A Helm chart that runs Ubiquiti's [UniFi OS Server](https://ui.com/download/unifi-os-server) in Kubernetes —
+letting you self-host the **UniFi Network** application (the controller for
+switches, APs, gateways, etc.) without buying a UniFi Console. This is the
+successor to the standalone Network Application that Ubiquiti previously offered.
+
+UniFi OS Server does **not** support UniFi Protect (cameras), Access, Talk, or
+Connect — those still require a UniFi Console.
+
+The upstream runtime model (systemd managing ~15 tightly coupled services) is
+kept intact while PostgreSQL, MongoDB, and RabbitMQ are exposed as explicit,
+replaceable dependencies. Each dependency can be toggled between a bundled
+subchart and an externally-managed instance.
 
 > **Warning** — this project is experimental and not suitable for production yet. There's a lot of AI work I don't have time to verify all of.
 
 ## Architecture
 
-### Upstream (the monstrosity Ubiquiti ships 🤮)
+### Upstream (what Ubiquiti ships 🤮)
 
 ```
 Installer binary
@@ -84,6 +91,15 @@ helm repo update
 helm upgrade -n unifi --create-namespace unifi unifi-os/unifi-os --install \
   -f values.env.yaml
 ```
+
+## Optional features
+
+The chart includes opt-in support for:
+
+- **Automated backups** via [unifi-backup](https://github.com/ConnorsApps/unifi-backup) — runs as a CronJob using a local UniFi OS admin account.
+- **Prometheus metrics** via [unpoller](https://github.com/unpoller/unpoller) — scrapes UniFi OS and exposes metrics for Prometheus.
+
+Both are disabled by default. See `values.env.example.yaml` and the `backup` / `unifiExporter` sections in `values.yaml` to enable them.
 
 ## Legal
 
