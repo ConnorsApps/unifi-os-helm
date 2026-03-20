@@ -3,6 +3,29 @@ entries:
   unifi-os:
   - apiVersion: v2
     appVersion: 5.0.6
+    created: "2026-03-20T00:33:25.073510471Z"
+    dependencies:
+    - name: hull
+      repository: https://vidispine.github.io/hull
+      version: 1.35.2
+    - condition: rabbitmq.enabled
+      name: rabbitmq
+      repository: oci://registry-1.docker.io/cloudpirates
+      version: 0.17.1
+    - alias: postgres
+      condition: postgres.enabled
+      name: cluster
+      repository: https://cloudnative-pg.github.io/charts
+      version: 0.4.0
+    description: UniFi OS Server - self-hosted UniFi management platform
+    digest: f90f8f3e758c469799ea6a9bbc1efabb33fcc5a3e17fe9401a475f087372b388
+    name: unifi-os
+    type: application
+    urls:
+    - https://github.com/ConnorsApps/unifi-os-helm/releases/download/unifi-os-0.3.0/unifi-os-0.3.0.tgz
+    version: 0.3.0
+  - apiVersion: v2
+    appVersion: 5.0.6
     created: "2026-03-19T02:28:57.059192774Z"
     dependencies:
     - name: hull
@@ -85,4 +108,4 @@ entries:
     urls:
     - https://github.com/ConnorsApps/unifi-os-helm/releases/download/unifi-os-0.1.4/unifi-os-0.1.4.tgz
     version: 0.1.4
-generated: "2026-03-19T02:28:57.059211258Z"
+generated: "2026-03-20T00:33:25.073535027Z"
