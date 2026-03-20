@@ -9,9 +9,10 @@ UniFi OS Server does **not** support UniFi Protect (cameras), Access, Talk, or
 Connect — those still require a UniFi Console.
 
 The upstream runtime model (systemd managing ~15 tightly coupled services) is
-kept intact while PostgreSQL, MongoDB, and RabbitMQ are exposed as explicit,
-replaceable dependencies. Each dependency can be toggled between a bundled
-subchart and an externally-managed instance.
+kept intact. PostgreSQL and RabbitMQ are exposed as explicit, replaceable
+dependencies (bundled subcharts or external instances). MongoDB runs embedded
+inside the container via the bundled `mongodb.service` — it is hardcoded by
+UniFi and cannot be externalized.
 
 > **Warning** — this project is experimental and not suitable for production yet. There's a lot of AI work I don't have time to verify all of.
 
@@ -38,9 +39,9 @@ Installer binary
 ```
 Helm release
   ├─ StatefulSet (single container, upstream systemd startup)
-  │    └─ unifi-os image (unifi-core, unifi, ulp-go, nginx, identity services)
+  │    └─ unifi-os image (unifi-core, unifi, ulp-go, nginx, identity services,
+  │                       mongodb — embedded, not externalized)
   ├─ PostgreSQL          (CloudNativePG subchart or external)
-  ├─ MongoDB             (CloudPirates subchart or external)
   └─ RabbitMQ            (CloudPirates subchart or external)
 ```
 
@@ -80,8 +81,7 @@ cp values.env.example.yaml values.env.yaml
 ```
 
 Edit `values.env.yaml` and set real passwords for
-`global.postgres.connection.password`, `global.mongodb.connection.password`,
-and `global.rabbitmq.connection.password`.
+`global.postgres.connection.password` and `global.rabbitmq.connection.password`.
 
 ### 2. Install
 
