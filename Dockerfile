@@ -130,6 +130,17 @@ RUN set -e \
     && sed -E -i 's|^[[:space:]]*error_log[[:space:]]+/data/unifi-core/logs/nginx-error\.log;|    error_log /dev/stderr;|' "$NGINX_CONF" \
     && sed -E -i 's|^[[:space:]]*error_log[[:space:]]+/var/log/nginx/error\.log[[:space:]]+notice;|error_log  /dev/stderr notice;|' "$NGINX_CONF"
 
+# Wrap timedatectl to report NTPSynchronized=yes.
+# systemd-timesyncd is not present in the extracted image. In Kubernetes the
+# host supplies correct time via the container runtime, but UniFi Core blocks
+# authentication when timedatectl reports NTPSynchronized=no. This wrapper
+# patches that single output line; all other timedatectl subcommands are
+# passed through unchanged.
+RUN mv /bundle/rootfs/usr/bin/timedatectl /bundle/rootfs/usr/bin/timedatectl.real \
+    && printf '#!/bin/sh\n/usr/bin/timedatectl.real "$@" | sed '"'"'s/^no$/yes/'"'"'\n' \
+         > /bundle/rootfs/usr/bin/timedatectl \
+    && chmod +x /bundle/rootfs/usr/bin/timedatectl
+
 # Bake static monolith startup wiring into the image so runtime only renders
 # env/secret-derived files before handing off to systemd.
 RUN set -e \
@@ -146,7 +157,7 @@ RUN set -e \
          '[Install]' \
          'WantedBy=multi-user.target' \
        > /bundle/rootfs/etc/systemd/system/postgresql.service \
-    && for _unit in postgresql@14-main.service postgresql-cluster@14-main.service mongodb.service rabbitmq-server.service epmd.service; do \
+    && for _unit in postgresql@14-main.service postgresql-cluster@14-main.service rabbitmq-server.service epmd.service; do \
          printf '%s\n' \
            '[Unit]' \
            'Description=External dependency stub' \
@@ -202,21 +213,18 @@ RUN set -e \
 
 # Trim embedded local data-plane services not used in charted/externalized mode.
 # Keep PostgreSQL 14 toolchain for compatibility with existing wrappers.
+# Keep MongoDB (mongod/mongos + config + data dir): UniFi Network manages its own
+# embedded MongoDB via the bundled mongodb.service unit.
 RUN set -e \
     && rm -rf \
          /bundle/rootfs/usr/bin/mongo \
-         /bundle/rootfs/usr/bin/mongod \
-         /bundle/rootfs/usr/bin/mongos \
          /bundle/rootfs/usr/bin/rabbitmq* \
          /bundle/rootfs/usr/sbin/rabbitmq* \
          /bundle/rootfs/usr/lib/rabbitmq \
          /bundle/rootfs/usr/lib/erlang \
          /bundle/rootfs/etc/rabbitmq \
-         /bundle/rootfs/etc/mongodb.conf \
-         /bundle/rootfs/var/lib/mongodb \
          /bundle/rootfs/var/lib/rabbitmq \
          /bundle/rootfs/var/log/rabbitmq \
-         /bundle/rootfs/var/log/mongodb \
          /bundle/rootfs/usr/lib/postgresql/16 \
          /bundle/rootfs/usr/share/postgresql/16 \
          /bundle/rootfs/etc/postgresql/16 \

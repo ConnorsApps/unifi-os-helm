@@ -2,8 +2,7 @@
 
 Consolidated service reference for UniFi OS Server, focused on what each service does and what it depends on.
 
-The chart now runs these services in a single systemd-driven container and externalizes PostgreSQL, MongoDB, and RabbitMQ via
-chart dependencies or external endpoints.
+The chart runs these services in a single systemd-driven container. PostgreSQL and RabbitMQ are externalized via chart dependencies or external endpoints. MongoDB runs embedded via the bundled `mongodb.service` unit.
 
 ## Table of contents
 
@@ -39,7 +38,8 @@ chart dependencies or external endpoints.
 
 **Dependencies:**
 - Required: `unifi-core`
-- Required for data/messaging: MongoDB (`MONGO_URI`) and RabbitMQ (`RABBITMQ_URI`) when externalized
+- Required for data: MongoDB (embedded, local `mongodb.service`)
+- Required for messaging: RabbitMQ (`RABBITMQ_URI`)
 
 ## ulp-go (Users / ULP)
 

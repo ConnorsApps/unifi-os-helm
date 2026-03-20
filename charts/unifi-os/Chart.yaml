@@ -3,7 +3,7 @@ name: unifi-os
 description: >-
   UniFi OS Server - self-hosted UniFi management platform
 type: application
-version: 0.2.1
+version: 0.3.0
 appVersion: "5.0.6"
 dependencies:
   - name: hull
@@ -15,13 +15,6 @@ dependencies:
     repository: oci://registry-1.docker.io/cloudpirates
     version: "0.17.1"
     condition: rabbitmq.enabled
-
-  # MongoDB via CloudPirates chart.
-  - name: mongodb
-    repository: oci://registry-1.docker.io/cloudpirates
-    version: "0.12.4"
-    alias: mongodb
-    condition: mongodb.enabled
 
   # CloudNativePG cluster dependency. Set postgres.enabled: true.
   - name: cluster

@@ -1,11 +1,13 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/vidispine/hull/refs/heads/main/hull/values.schema.json
 
 # ------------------------------------------------------------------
-# Dependencies — MongoDB, PostgreSQL, RabbitMQ
+# Dependencies — PostgreSQL, RabbitMQ
+#
+# MongoDB runs embedded inside the container (bundled mongod + mongodb.service).
+# No external MongoDB configuration is supported or needed.
 #
 # | Mode     | Subchart | External | What to set |
 # |----------|----------|----------|-------------|
-# | MongoDB  | mongodb.enabled: true | mongodb.enabled: false | connection.host |
 # | Postgres | postgres.enabled: true | postgres.enabled: false | connection.host |
 # | RabbitMQ | rabbitmq.enabled: true | rabbitmq.enabled: false | connection.host |
 #
@@ -14,28 +16,15 @@
 # global.*.connection overrides chart-local values below (umbrella charts).
 # When using global: parent can provide existing secrets, otherwise this chart
 # creates and uses the default secret names:
-#   mongodb: mongodb-password, rabbitmq: rabbitmq-auth, postgres: unifi-pg-auth
+#   rabbitmq: rabbitmq-auth, postgres: unifi-pg-auth
 # ------------------------------------------------------------------
 # Global connection defaults — set non-sensitive defaults here.
 # Sensitive fields (password, erlangCookie) must be set here or via
 # existingSecret unless using an umbrella chart that provides them.
 # Parent/umbrella can override; subcharts still use:
-#   mongodb-password, rabbitmq-auth, unifi-pg-auth
+#   rabbitmq-auth, unifi-pg-auth
 # ------------------------------------------------------------------
 global:
-  mongodb:
-    connection:
-      host: ""
-      port: 27017
-      database: unifi
-      username: unifi
-      # Required unless existingSecret.name is set
-      password: ""
-      replicaSetName: ""
-      existingSecret:
-        name: ""
-        passwordKey: ""
-      uri: ""
   postgres:
     connection:
       host: ""
@@ -420,13 +409,6 @@ hull:
     # Secrets
     # ------------------------------------------------------------------
     secret:
-      mongodb-password:
-        enabled: _HT!{{ not (include "unifi-os.mongodbUseExistingSecret" (index . "PARENT_CONTEXT") | trim) }}
-        staticName: true
-        metadataNameOverride: mongodb-password
-        type: Opaque
-        stringData:
-          password: _HT!{{ include "unifi-os.mongodbPassword" (index . "PARENT_CONTEXT") }}
       rabbitmq-auth:
         enabled: _HT!{{ not (include "unifi-os.rabbitmqUseExistingSecret" (index . "PARENT_CONTEXT") | trim) }}
         staticName: true
@@ -456,7 +438,7 @@ hull:
         stringData:
           password: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.password }}
     # ------------------------------------------------------------------
-    # StatefulSet — single-container systemd runtime (Postgres/Mongo/RMQ external).
+    # StatefulSet — single-container systemd runtime (Postgres/RMQ external; Mongo embedded).
     # ------------------------------------------------------------------
     statefulset:
       monolith:
@@ -503,6 +485,14 @@ hull:
               resources:
                 requests:
                   storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.log | quote }}
+          - metadata:
+              name: mongodb
+            spec:
+              accessModes: [ReadWriteOnce]
+              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
+              resources:
+                requests:
+                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.mongodb | quote }}
         pod:
           securityContext: {}
           volumes:
@@ -714,10 +704,10 @@ hull:
                   mkdir -p /var/lib/unifi
                   cat >/var/lib/unifi/env-overrides <<EOF
                   UNIFI_MQ_ENABLED=true
-                  UNIFI_MONGODB_SERVICE_ENABLED=false
-                  MONGO_URI=${MONGO_URI}
                   RABBITMQ_URI=${RABBITMQ_URI}
                   EOF
+                  # MongoDB runs embedded via the bundled mongodb.service unit.
+                  # No db_uri override needed — UniFi Network uses localhost by default.
                   # Run systemd as PID 1 so bundled UniFi services are managed
                   # by their native unit files inside the monolith container.
                   exec /sbin/init
@@ -728,13 +718,6 @@ hull:
                   value: _HT!{{ include "unifi-os.postgresHost" (index . "PARENT_CONTEXT") }}
                 PGPORT:
                   value: _HT!{{ include "unifi-os.postgresPort" (index . "PARENT_CONTEXT") }}
-                MONGO_PASSWORD:
-                  valueFrom:
-                    secretKeyRef:
-                      name: _HT!{{ include "unifi-os.mongodbSecretName" (index . "PARENT_CONTEXT") }}
-                      key: _HT!{{ include "unifi-os.mongodbSecretPasswordKey" (index . "PARENT_CONTEXT") }}
-                MONGO_URI:
-                  value: _HT!{{ include "unifi-os.mongoURI" (index . "PARENT_CONTEXT") }}
                 RABBITMQ_PASSWORD:
                   valueFrom:
                     secretKeyRef:
@@ -812,6 +795,9 @@ hull:
                 unifi:
                   name: unifi
                   mountPath: /var/lib/unifi
+                mongodb:
+                  name: mongodb
+                  mountPath: /var/lib/mongodb
                 log:
                   name: log
                   mountPath: /var/log
@@ -834,11 +820,11 @@ hull:
                   readOnly: true
               resources:
                 requests:
-                  cpu: 500m
-                  memory: 2Gi
+                  cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.requests.cpu | quote }}
+                  memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.requests.memory | quote }}
                 limits:
-                  cpu: 4000m
-                  memory: 8Gi
+                  cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.limits.cpu | quote }}
+                  memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.limits.memory | quote }}
             journalctl:
               image:
                 repository: _HT!{{ (index . "PARENT_CONTEXT").Values.image.repository | quote }}
@@ -1115,35 +1101,6 @@ unifiExporter:
       memory: 256Mi
 
 # ------------------------------------------------------------------
-# MongoDB
-# ------------------------------------------------------------------
-mongodb:
-  enabled: false # Subchart on/off; when false, set global.mongodb.connection.host for external
-  connection: {} # Optional overrides only; defaults in global.mongodb.connection
-  # Subchart config (CloudPirates) — when enabled; uses secret mongodb-password (we create or you create with that name)
-  auth:
-    enabled: true
-    existingSecret: "mongodb-password"
-    # CloudPirates MongoDB uses existingSecretPasswordKey (not existingPasswordKey).
-    existingSecretPasswordKey: password
-  # Replica set mode — REQUIRED when global.mongodb.connection.replicaSetName is set (default: rs0).
-  # The UniFi Network app's MongoDB Java driver requires a replica set when replicaSetName is non-empty.
-  # To use a standalone instance instead, set:
-  #   global.mongodb.connection.replicaSetName: ""
-  #   mongodb.replicaSet.enabled: false
-  persistence:
-    enabled: true
-    size: 10Gi
-    storageClass: ""
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
-      memory: 1Gi
-
-# ------------------------------------------------------------------
 # RabbitMQ
 # ------------------------------------------------------------------
 rabbitmq:
@@ -1264,6 +1221,12 @@ postgres:
 # UniFi
 # ------------------------------------------------------------------
 unifi:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 8Gi
   storage:
     statefulset:
       storageClassName: ""
@@ -1273,6 +1236,7 @@ unifi:
         srv: 5Gi
         unifi: 10Gi
         log: 5Gi
+        mongodb: 10Gi
   configOverrides:
     services:
       - id: ulp-go
