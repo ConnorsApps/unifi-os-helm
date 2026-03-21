@@ -2,7 +2,7 @@
 Chart name for unifi-os.
 */}}
 {{- define "unifi-os.name" -}}
-{{- default .Chart.Name .Chart.NameOverride | trunc 63 | trimSuffix "-" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
