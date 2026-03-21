@@ -904,7 +904,7 @@ hull:
                   protocol: TCP
               env:
                 UP_UNIFI_DEFAULT_URL:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.url | default (printf "https://http.%s.svc.cluster.local:8443" ((index . "PARENT_CONTEXT").Release.Namespace)) | quote }}
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.url | default (printf "https://http.%s.svc.cluster.local" ((index . "PARENT_CONTEXT").Release.Namespace)) | quote }}
                 UP_UNIFI_DEFAULT_USER:
                   value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.username | quote }}
                 UP_UNIFI_DEFAULT_PASS:
@@ -1070,7 +1070,7 @@ unifiExporter:
 
   config:
     # UniFi OS controller URL.
-    # Leave empty to auto-derive: https://http.<namespace>.svc.cluster.local:8443
+    # Leave empty to auto-derive: https://http.<namespace>.svc.cluster.local
     url: ""
     username: ""
     # Ignored when existingSecret.name is set.
