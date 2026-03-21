@@ -822,9 +822,7 @@ hull:
                 requests:
                   cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.requests.cpu | quote }}
                   memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.requests.memory | quote }}
-                limits:
-                  cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.limits.cpu | quote }}
-                  memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.limits.memory | quote }}
+                limits: _HT!{{ $l := (index . "PARENT_CONTEXT").Values.unifi.resources.limits }}{{ if $l.cpu }}{{ dict "memory" $l.memory "cpu" $l.cpu | toJson }}{{ else }}{{ dict "memory" $l.memory | toJson }}{{ end }}
             journalctl:
               image:
                 repository: _HT!{{ (index . "PARENT_CONTEXT").Values.image.repository | quote }}
