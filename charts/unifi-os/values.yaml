@@ -1104,6 +1104,11 @@ unifiExporter:
 rabbitmq:
   enabled: true
   connection: {} # Optional overrides only; defaults in global.rabbitmq.connection
+  # Prevent fsGroup from adding group-read permissions to the Erlang cookie file.
+  # RabbitMQ / Erlang requires .erlang.cookie to be mode 0400 (owner-only).
+  podSecurityContext:
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
   # Subchart uses secret rabbitmq-auth (we create or you create with that name)
   auth:
     enabled: true
