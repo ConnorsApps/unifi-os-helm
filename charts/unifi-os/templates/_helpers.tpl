@@ -74,11 +74,17 @@ PostgreSQL connection values from merged config (global defaults; override via p
 {{- end -}}
 
 {{/*
-Effective PostgreSQL password — required unless connection.existingSecret.name is set (merged config).
+PostgreSQL password for creating unifi-pg-auth. Returns empty when existingSecret.name is set
+(secret creation is skipped; password is resolved at runtime from the existing secret).
 */}}
 {{- define "unifi-os.postgresPassword" -}}
 {{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- index $conn "password" | required "global.postgres.connection.password is required (set password or connection.existingSecret.name to use an existing secret)" -}}
+{{- $existing := index $conn "existingSecret" | default dict -}}
+{{- if index $existing "name" -}}
+{{- "" -}}
+{{- else -}}
+{{- index $conn "password" | required "global.postgres.connection.password is required" -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

@@ -11,18 +11,18 @@
 # | Postgres | postgres.enabled: true | postgres.enabled: false | connection.host |
 # | RabbitMQ | rabbitmq.enabled: true | rabbitmq.enabled: false | connection.host |
 #
-# For external: set connection.host (and connection.password or existingSecret).
-# For subchart: host is derived; set connection.password for app auth.
+# For external: set connection.host and either connection.password or connection.existingSecret.
+# For subchart: host is derived; set connection.password (or existingSecret) for app auth.
 # global.*.connection overrides chart-local values below (umbrella charts).
 # When using global: parent can provide existing secrets, otherwise this chart
 # creates and uses the default secret names:
 #   rabbitmq: rabbitmq-auth, postgres: unifi-pg-auth
 # ------------------------------------------------------------------
 # Global connection defaults — set non-sensitive defaults here.
-# Sensitive fields (password, erlangCookie) must be set here or via
-# existingSecret unless using an umbrella chart that provides them.
-# Parent/umbrella can override; subcharts still use:
-#   rabbitmq-auth, unifi-pg-auth
+# For passwords: either set connection.password directly, or point connection.existingSecret
+# at a pre-existing K8s secret (e.g. created by an ESO/Vault operator or by CNPG).
+# existingSecret skips creating the chart-managed auth secret entirely; the password is
+# resolved at pod init time from the referenced secret via secretKeyRef.
 # ------------------------------------------------------------------
 global:
   postgres:
@@ -31,9 +31,11 @@ global:
       port: 5432
       database: unifi-core
       user: unifi-core
-      # Required unless existingSecret.name is set
+      # Required when existingSecret.name is not set.
       password: ""
       existingSecret:
+        # When set: skips creating unifi-pg-auth. Password is resolved at runtime from this
+        # secret via secretKeyRef — no plaintext password needed in Helm values.
         name: ""
         passwordKey: ""
   rabbitmq:
@@ -511,6 +513,7 @@ hull:
                 sources:
                   - secret:
                       name: postgres-unifi-core-override
+                      optional: true
                       items:
                         - key: local.yaml
                           path: unifi-core/local.yaml
@@ -535,36 +538,43 @@ hull:
                           path: uid/logging.config.props
                   - secret:
                       name: config-override-secret-ulp-go
+                      optional: true
                       items:
                         - key: config.props
                           path: ulp-go/db.config.props
                   - secret:
                       name: config-override-secret-unifi-credential-server
+                      optional: true
                       items:
                         - key: config.props
                           path: unifi-credential-server/db.config.props
                   - secret:
                       name: config-override-secret-ucs-user-assets
+                      optional: true
                       items:
                         - key: config.props
                           path: ucs-user-assets/db.config.props
                   - secret:
                       name: config-override-secret-unifi-directory
+                      optional: true
                       items:
                         - key: config.props
                           path: unifi-directory/db.config.props
                   - secret:
                       name: config-override-secret-ucs-agent
+                      optional: true
                       items:
                         - key: config.props
                           path: ucs-agent/db.config.props
                   - secret:
                       name: config-override-secret-unifi-identity-update
+                      optional: true
                       items:
                         - key: config.props
                           path: unifi-identity-update/db.config.props
                   - secret:
                       name: config-override-secret-uid-agent
+                      optional: true
                       items:
                         - key: config.props
                           path: uid/db.config.props
@@ -597,6 +607,19 @@ hull:
               env:
                 UOS_UUID:
                   value: "3403e723-3f5b-5a1e-9b88-ed7e2fcfd762"
+                PGHOST:
+                  value: _HT!{{ include "unifi-os.postgresHost" (index . "PARENT_CONTEXT") }}
+                PGPORT:
+                  value: _HT!{{ include "unifi-os.postgresPort" (index . "PARENT_CONTEXT") | quote }}
+                PGDATABASE:
+                  value: _HT!{{ include "unifi-os.postgresDatabase" (index . "PARENT_CONTEXT") }}
+                PGUSER:
+                  value: _HT!{{ include "unifi-os.postgresUser" (index . "PARENT_CONTEXT") }}
+                PGPASSWORD:
+                  valueFrom:
+                    secretKeyRef:
+                      name: _HT!{{ include "unifi-os.postgresSecretName" (index . "PARENT_CONTEXT") }}
+                      key: _HT!{{ include "unifi-os.postgresSecretPasswordKey" (index . "PARENT_CONTEXT") }}
               command:
                 - /bin/bash
                 - -c
@@ -634,8 +657,15 @@ hull:
                   fi
                   # Copy overrides from read-only projected secrets into writable /data.
                   # Service pre-start scripts chown these files, so they cannot stay read-only mounts.
+                  # When existingSecret is configured, the projected secrets are absent; configs are
+                  # generated from PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD env vars instead.
                   if [ -f /run/secrets/overrides/unifi-core/local.yaml ]; then
                     cp /run/secrets/overrides/unifi-core/local.yaml /data/unifi-core/config/overrides/local.yaml
+                    chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
+                  elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
+                    printf 'postgres:\n  host: %s\n  port: %s\n  database: %s\n  user: %s\n  password: "%s"\n' \
+                      "${PGHOST}" "${PGPORT:-5432}" "${PGDATABASE:-unifi-core}" "${PGUSER:-unifi-core}" "${PGPASSWORD}" \
+                      > /data/unifi-core/config/overrides/local.yaml
                     chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
                   fi
                   if [ -f /run/secrets/overrides/unifi-core/production.yaml ]; then
@@ -643,19 +673,24 @@ hull:
                     chown "$USER:$GROUP" /data/unifi-core/config/overrides/production.yaml 2>/dev/null || true
                   fi
                   for _entry in \
-                    "ulp-go|/data/ulp-go/ws/config.props" \
-                    "unifi-credential-server|/data/unifi-credential-server/ws/config.props" \
-                    "ucs-user-assets|/data/ucs-user-assets/ws/config.props" \
-                    "unifi-directory|/data/unifi-directory/ws/config.props" \
-                    "ucs-agent|/data/ucs-agent/ws/config.props" \
-                    "unifi-identity-update|/data/unifi-identity-update/ws/config.props" \
-                    "uid|/data/uid/ws/config.props"; do
-                    _svc="${_entry%%|*}"
-                    _dst="${_entry#*|}"
+                    "ulp-go|ulp-go|ulp-go|/data/ulp-go/ws/config.props" \
+                    "unifi-credential-server|unifi-credential-server|unifi-credential-server|/data/unifi-credential-server/ws/config.props" \
+                    "ucs-user-assets|ucs-user-assets|unifi-credential-server|/data/ucs-user-assets/ws/config.props" \
+                    "unifi-directory|unifi-directory|unifi-directory|/data/unifi-directory/ws/config.props" \
+                    "ucs-agent|ucs-agent|ucs-agent|/data/ucs-agent/ws/config.props" \
+                    "unifi-identity-update|unifi-identity-update|unifi-identity-update|/data/unifi-identity-update/ws/config.props" \
+                    "uid|uid|uid|/data/uid/ws/config.props"; do
+                    _svc="${_entry%%|*}"; _r="${_entry#*|}"
+                    _db_name="${_r%%|*}"; _r="${_r#*|}"
+                    _db_user="${_r%%|*}"; _dst="${_r#*|}"
                     _db_src="/run/secrets/overrides/${_svc}/db.config.props"
                     _log_src="/run/secrets/overrides/${_svc}/logging.config.props"
                     if [ -f "${_db_src}" ]; then
                       cp "${_db_src}" "${_dst}"
+                    elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
+                      printf 'db.name = %s\ndb.host = %s\ndb.port = %s\ndb.encrypted = false\ndb.username = %s\ndb.password = %s\n' \
+                        "${_db_name}" "${PGHOST}" "${PGPORT:-5432}" "${_db_user}" "${PGPASSWORD}" \
+                        > "${_dst}"
                     fi
                     if [ -f "${_log_src}" ]; then
                       [ -f "${_dst}" ] && printf '\n' >> "${_dst}" || true
