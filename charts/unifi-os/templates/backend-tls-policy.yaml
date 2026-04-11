@@ -1,0 +1,38 @@
+{{- if and .Values.unifi.tls.certManager.enabled .Values.unifi.tls.certManager.backendTLSPolicy.enabled }}
+{{- $cm := .Values.unifi.tls.certManager }}
+{{- $btp := $cm.backendTLSPolicy }}
+{{- $hostname := $btp.hostname }}
+{{- if not $hostname }}
+{{- $hostname = $cm.dnsNames | first }}
+{{- end }}
+{{- if and (not $hostname) .Values.unifi.gateway.httpRoute.hostname }}
+{{- $hostname = .Values.unifi.gateway.httpRoute.hostname }}
+{{- end }}
+{{- if not (or $btp.wellKnownCACertificates $btp.caCertificateRef.name) }}
+{{- fail "backendTLSPolicy requires either wellKnownCACertificates or caCertificateRef.name" }}
+{{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: unifi-backend-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.standardLabels" . | nindent 4 }}
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: http
+  validation:
+    {{- if $btp.wellKnownCACertificates }}
+    wellKnownCACertificates: {{ $btp.wellKnownCACertificates }}
+    {{- else }}
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: {{ $btp.caCertificateRef.name }}
+        key: {{ $btp.caCertificateRef.key | default "ca.crt" }}
+    {{- end }}
+    hostname: {{ $hostname | quote }}
+{{- end }}

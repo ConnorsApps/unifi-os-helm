@@ -11,18 +11,14 @@
 # | Postgres | postgres.enabled: true | postgres.enabled: false | connection.host |
 # | RabbitMQ | rabbitmq.enabled: true | rabbitmq.enabled: false | connection.host |
 #
-# For external: set connection.host and either connection.password or connection.existingSecret.
-# For subchart: host is derived; set connection.password (or existingSecret) for app auth.
-# global.*.connection overrides chart-local values below (umbrella charts).
-# When using global: parent can provide existing secrets, otherwise this chart
-# creates and uses the default secret names:
-#   rabbitmq: rabbitmq-auth, postgres: unifi-pg-auth
-# ------------------------------------------------------------------
-# Global connection defaults — set non-sensitive defaults here.
-# For passwords: either set connection.password directly, or point connection.existingSecret
-# at a pre-existing K8s secret (e.g. created by an ESO/Vault operator or by CNPG).
-# existingSecret skips creating the chart-managed auth secret entirely; the password is
-# resolved at pod init time from the referenced secret via secretKeyRef.
+# Bundled postgres (postgres.enabled: true) uses the CloudNativePG cluster subchart.
+# Set connection.password and the chart generates all pg-login-* secrets automatically.
+# Set postgres.useExistingSecrets: true to provide your own pg-login-* secrets instead
+# (e.g. via ESO/Vault) — secret names are fixed and cannot be changed.
+#
+# For external postgres (postgres.enabled: false): set connection.host and either
+# connection.password or connection.existingSecret.
+# global.*.connection overrides chart-local values (umbrella charts).
 # ------------------------------------------------------------------
 global:
   postgres:
@@ -31,11 +27,15 @@ global:
       port: 5432
       database: unifi-core
       user: unifi-core
-      # Required when existingSecret.name is not set.
+      # password: plaintext password. Chart creates unifi-pg-auth and pg-login-* secrets.
       password: ""
+      # useExistingSecrets: when true, chart expects pre-created pg-login-<rolename> secrets
+      #   (e.g. from ESO/Vault). Secret names are fixed — see DATABASE.md for the full list.
+      #   Mutually exclusive with password. Only applies when postgres.enabled: true.
+      useExistingSecrets: false
+      # existingSecret: for external postgres (postgres.enabled: false) only.
+      #   Provides PGPASSWORD to the app via secretKeyRef.
       existingSecret:
-        # When set: skips creating unifi-pg-auth. Password is resolved at runtime from this
-        # secret via secretKeyRef — no plaintext password needed in Helm values.
         name: ""
         passwordKey: ""
   rabbitmq:
@@ -198,6 +198,18 @@ hull:
     # Services
     # ------------------------------------------------------------------
     service:
+      # Device and application communication (inform URL)
+      # Useful when backendTLSPolicy is used (unifi lacks https support for inform url)
+      http-inform:
+        enabled: true
+        type: ClusterIP
+        selector:
+          app.kubernetes.io/component: monolith
+        ports:
+          inform:
+            port: 8080
+            protocol: TCP
+            name: inform
       # Primary ClusterIP — HTTP/HTTPS application ports consumed by ingress.
       http:
         enabled: true
@@ -305,6 +317,26 @@ hull:
     # Gateway API / Istio routing objects
     # ------------------------------------------------------------------
     httproute:
+      unifi-inform:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.enabled }}
+        hostnames: _HT!{{ list (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.hostname }}
+        parentRefs:
+          private:
+            kind: Gateway
+            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
+            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
+            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.sectionName }}
+        rules:
+          default:
+            backendRefs:
+              http-inform:
+                name: http-inform
+                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.backendPort }}
+            matches:
+              inform:
+                path:
+                  type: PathPrefix
+                  value: /inform
       unifi-https:
         enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.enabled }}
         hostnames: _HT!{{ list (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.hostname }}
@@ -583,9 +615,13 @@ hull:
                 name: discovery-shim-script
                 defaultMode: 0755
             postgres-superuser-auth:
-              enabled: true
+              enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.postgres.enabled }}
               secret:
-                secretName: _HT!{{ printf "%s-superuser" ((index . "PARENT_CONTEXT").Values.postgres.clusterName | default "unifi-postgres") }}
+                secretName: _HT!{{ printf "%s-superuser" ((index . "PARENT_CONTEXT").Values.postgres.fullnameOverride | default "unifi-postgres") }}
+            unifi-tls-secret:
+              enabled: _HT!{{ ne (include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT")) "" }}
+              secret:
+                secretName: _HT!{{ include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT") }}
           initContainers:
             wait-postgres:
               enabled: true
@@ -644,6 +680,13 @@ hull:
                   _tls_crt="${_tls_dir}/unifi-core.crt"
                   _tls_key="${_tls_dir}/unifi-core.key"
                   _tls_ca="${_tls_dir}/unifi-core-ca.crt"
+                  if [ -f /run/secrets/tls/tls.crt ] && [ -f /run/secrets/tls/tls.key ]; then
+                    cp /run/secrets/tls/tls.crt "${_tls_crt}"
+                    cp /run/secrets/tls/tls.key "${_tls_key}"
+                    [ -f /run/secrets/tls/ca.crt ] && cp /run/secrets/tls/ca.crt "${_tls_ca}" || cp "${_tls_crt}" "${_tls_ca}"
+                    chown "$USER:$GROUP" "${_tls_crt}" "${_tls_key}" "${_tls_ca}" 2>/dev/null || true
+                    chmod 600 "${_tls_key}" 2>/dev/null || true
+                  fi
                   if [ ! -s "${_tls_crt}" ] || [ ! -s "${_tls_key}" ]; then
                     rm -f "${_tls_crt}" "${_tls_key}"
                     openssl req -x509 -newkey rsa:2048 -nodes \
@@ -713,6 +756,11 @@ hull:
                 override-config-secrets:
                   name: override-config-secrets
                   mountPath: /run/secrets/overrides
+                  readOnly: true
+                unifi-tls-secret:
+                  enabled: _HT!{{ ne (include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT")) "" }}
+                  name: unifi-tls-secret
+                  mountPath: /run/secrets/tls
                   readOnly: true
           containers:
             unifi-os:
@@ -849,6 +897,7 @@ hull:
                   name: cgroup
                   mountPath: /sys/fs/cgroup
                 postgres-superuser-auth:
+                  enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.postgres.enabled }}
                   name: postgres-superuser-auth
                   mountPath: /run/secrets/postgres-superuser/pgpass
                   subPath: pgpass
@@ -1144,7 +1193,11 @@ rabbitmq:
   podSecurityContext:
     fsGroup: 999
     fsGroupChangePolicy: OnRootMismatch
-  # Subchart uses secret rabbitmq-auth (we create or you create with that name)
+  # When global.rabbitmq.connection.password is set, this chart creates "rabbitmq-auth" and the
+  # subchart reads from it. When global.rabbitmq.connection.existingSecret.name is set instead,
+  # "rabbitmq-auth" is NOT created — you must override auth.existingSecret/existingPasswordKey/
+  # existingErlangCookieKey here (or in your values file) to point at your secret.
+  # HULL _HT! cannot reach subchart pass-through values, so this cannot be done automatically.
   auth:
     enabled: true
     username: "unifi"
@@ -1165,18 +1218,26 @@ rabbitmq:
       memory: 1Gi
 
 # ------------------------------------------------------------------
-# PostgreSQL
+# PostgreSQL — CloudNativePG subchart
+#
+# Two credential modes for bundled CNPG (postgres.enabled: true):
+#
+#   useExistingSecrets: false (default)
+#     Set global.postgres.connection.password. The chart generates pg-login-<rolename>
+#     secrets and unifi-pg-auth automatically.
+#
+#   useExistingSecrets: true
+#     Create pg-login-<rolename> secrets yourself before installing (e.g. via ESO/Vault).
+#     Secret names are fixed — pg-login-unifi-core, pg-login-ulp-go, etc.
+#     Each must be type kubernetes.io/basic-auth with username and password keys.
+#
+# For external postgres (postgres.enabled: false), set connection.host and either
+# connection.password or connection.existingSecret.
 # ------------------------------------------------------------------
 postgres:
   enabled: false
   connection: {} # Optional overrides only; defaults in global.postgres.connection
-  clusterName: unifi-postgres
-  # No top-level auth block here; credentials come from global.postgres.connection
-  # and the chart-managed secret unifi-pg-auth/pg-login-* resources.
-  fullnameOverride: "unifi-postgres"
-  type: postgresql
-  version:
-    postgresql: "14"
+  fullnameOverride: unifi-postgres
   cluster:
     instances: 1
     imageName: "ghcr.io/cloudnative-pg/postgresql:14-bookworm"
@@ -1187,56 +1248,56 @@ postgres:
       database: unifi-core
       owner: unifi-core
       secret:
-        name: unifi-pg-auth
+        name: pg-login-unifi-core
     roles:
       - name: unifi-core
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-unifi-core
-        createdb: true
       - name: ulp-go
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-ulp-go
-        createdb: true
       - name: uid
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-uid
-        createdb: true
       - name: unifi-credential-server
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-unifi-credential-server
-        createdb: true
       - name: unifi-directory
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-unifi-directory
-        createdb: true
       - name: ucs-agent
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-ucs-agent
-        createdb: true
       - name: ucs-update
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-ucs-update
-        createdb: true
       - name: unifi-identity-update
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-unifi-identity-update
-        createdb: true
   databases:
     - name: unifi-core
       owner: unifi-core
@@ -1259,6 +1320,35 @@ postgres:
 # UniFi
 # ------------------------------------------------------------------
 unifi:
+  tls:
+    # Name of an existing kubernetes.io/tls secret to use for UniFi's nginx.
+    # The secret must have tls.crt and tls.key keys; ca.crt is optional.
+    # Ignored when certManager.enabled — the cert-manager secret is used instead.
+    existingSecret: ""
+    certManager:
+      enabled: false
+      # Name of the Secret cert-manager will create. Also used for the volume mount.
+      secretName: unifi-tls
+      issuerRef:
+        name: ""               # required
+        kind: ClusterIssuer    # or Issuer
+        group: cert-manager.io
+      # dnsNames defaults to gateway.httpRoute.hostname when empty.
+      dnsNames: []
+      duration: 2160h          # 90 days
+      renewBefore: 360h        # 15 days
+      # backendTLSPolicy: generates a Gateway API BackendTLSPolicy so the gateway
+      # re-encrypts traffic to the UniFi backend using the issued cert.
+      backendTLSPolicy:
+        enabled: false
+        # For public CAs (Let's Encrypt etc.): set wellKnownCACertificates: System
+        # For private CAs: leave empty and set caCertificateRef to a ConfigMap with the CA cert.
+        wellKnownCACertificates: ""
+        caCertificateRef:
+          name: ""     # ConfigMap name containing the CA cert
+          key: ca.crt
+        # SNI hostname sent to the backend. Defaults to dnsNames[0] / httpRoute.hostname.
+        hostname: ""
   resources:
     requests:
       cpu: 500m
@@ -1329,6 +1419,11 @@ unifi:
     parentRef:
       name: ""
       namespace: ""
+    httpRouteInform:
+      enabled: false
+      hostname: ""
+      sectionName: ""
+      backendPort: 8080
     httpRoute:
       enabled: false
       hostname: ""

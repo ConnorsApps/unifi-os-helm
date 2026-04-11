@@ -37,7 +37,7 @@ PostgreSQL host — explicit connection.host when set (local or global), else de
 {{- if index $conn "host" -}}
 {{- index $conn "host" -}}
 {{- else if .Values.postgres.enabled -}}
-{{- printf "%s-rw.%s.svc.cluster.local" .Values.postgres.clusterName .Release.Namespace -}}
+{{- printf "%s-rw.%s.svc.cluster.local" (.Values.postgres.fullnameOverride | default "unifi-postgres") .Release.Namespace -}}
 {{- else -}}
 {{- "" -}}
 {{- end -}}
@@ -70,25 +70,25 @@ PostgreSQL connection values from merged config (global defaults; override via p
 {{- end -}}
 {{- define "unifi-os.postgresUser" -}}
 {{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- index $conn "user" -}}
+{{- index $conn "user" | default "unifi-core" -}}
 {{- end -}}
 
 {{/*
-PostgreSQL password for creating unifi-pg-auth. Returns empty when existingSecret.name is set
-(secret creation is skipped; password is resolved at runtime from the existing secret).
+PostgreSQL password for creating unifi-pg-auth (plaintext mode only).
 */}}
 {{- define "unifi-os.postgresPassword" -}}
 {{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $existing "name" -}}
+{{- if index $conn "useExistingSecrets" -}}
 {{- "" -}}
 {{- else -}}
-{{- index $conn "password" | required "global.postgres.connection.password is required" -}}
+{{- index $conn "password" | required "global.postgres.connection.password is required (or set global.postgres.connection.useExistingSecrets: true)" -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-Whether to use existing secret (skip creating our own). Returns "true" when existingSecret.name is set.
+Whether chart-managed credential secrets should be skipped.
+True when postgres.useExistingSecrets is true or existingSecret.name is set.
+Controls: unifi-pg-auth creation and init container mode.
 */}}
 {{- define "unifi-os.rabbitmqUseExistingSecret" -}}
 {{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
@@ -98,8 +98,35 @@ true
 {{- end -}}
 {{- define "unifi-os.postgresUseExistingSecret" -}}
 {{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- if index (index $conn "existingSecret" | default dict) "name" -}}
+{{- if or (index $conn "useExistingSecrets") (index (index $conn "existingSecret" | default dict) "name") -}}
 true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Secret name for PostgreSQL app PGPASSWORD (secretKeyRef in the UniFi pod).
+  postgres.useExistingSecrets true → pg-login-<connection.user> (e.g. pg-login-unifi-core)
+  existingSecret.name set         → existingSecret.name
+  otherwise                       → unifi-pg-auth (chart-managed)
+*/}}
+{{- define "unifi-os.postgresSecretName" -}}
+{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
+{{- $existing := index $conn "existingSecret" | default dict -}}
+{{- if index $conn "useExistingSecrets" -}}
+{{- printf "pg-login-%s" (index $conn "user" | default "unifi-core") -}}
+{{- else if index $existing "name" -}}
+{{- index $existing "name" -}}
+{{- else -}}
+{{- "unifi-pg-auth" -}}
+{{- end -}}
+{{- end -}}
+{{- define "unifi-os.postgresSecretPasswordKey" -}}
+{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
+{{- $existing := index $conn "existingSecret" | default dict -}}
+{{- if index $existing "name" -}}
+{{- index $existing "passwordKey" | default "password" -}}
+{{- else -}}
+{{- "password" -}}
 {{- end -}}
 {{- end -}}
 
@@ -117,27 +144,6 @@ Secret ref for RabbitMQ auth — name, passwordKey, erlangCookieKey for secretKe
 {{- end -}}
 {{- define "unifi-os.rabbitmqSecretPasswordKey" -}}
 {{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $existing "name" -}}
-{{- index $existing "passwordKey" | default "password" -}}
-{{- else -}}
-{{- "password" -}}
-{{- end -}}
-{{- end -}}
-{{/*
-Secret ref for PostgreSQL auth — name and key for secretKeyRef.
-*/}}
-{{- define "unifi-os.postgresSecretName" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $existing "name" -}}
-{{- index $existing "name" -}}
-{{- else -}}
-{{- "unifi-pg-auth" -}}
-{{- end -}}
-{{- end -}}
-{{- define "unifi-os.postgresSecretPasswordKey" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
 {{- $existing := index $conn "existingSecret" | default dict -}}
 {{- if index $existing "name" -}}
 {{- index $existing "passwordKey" | default "password" -}}
@@ -165,6 +171,19 @@ RabbitMQ password and erlang-cookie from merged connection (for secret creation)
 {{- "" -}}
 {{- else -}}
 {{- index $conn "erlangCookie" | required "global.rabbitmq.connection.erlangCookie is required (set erlangCookie or connection.existingSecret.name to use an existing secret)" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+TLS secret name for UniFi's nginx backend.
+Returns certManager.secretName when certManager is enabled, else existingSecret, else "".
+Used to conditionally enable the tls volume/mount and init container copy step.
+*/}}
+{{- define "unifi-os.unifiTLSSecretName" -}}
+{{- if .Values.unifi.tls.certManager.enabled -}}
+{{- .Values.unifi.tls.certManager.secretName | default "unifi-tls" -}}
+{{- else -}}
+{{- .Values.unifi.tls.existingSecret -}}
 {{- end -}}
 {{- end -}}
 

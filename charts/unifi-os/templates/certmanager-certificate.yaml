@@ -1,0 +1,35 @@
+{{- if .Values.unifi.tls.certManager.enabled }}
+{{- $cm := .Values.unifi.tls.certManager }}
+{{- if not $cm.issuerRef.name }}
+{{- fail "unifi.tls.certManager.issuerRef.name is required when certManager.enabled is true" }}
+{{- end }}
+{{- $dnsNames := $cm.dnsNames }}
+{{- if and (not $dnsNames) .Values.unifi.gateway.httpRoute.hostname }}
+{{- $dnsNames = list .Values.unifi.gateway.httpRoute.hostname }}
+{{- end }}
+{{- if not $dnsNames }}
+{{- fail "unifi.tls.certManager.dnsNames is required (or set unifi.gateway.httpRoute.hostname)" }}
+{{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: unifi-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.standardLabels" . | nindent 4 }}
+spec:
+  secretName: {{ $cm.secretName | default "unifi-tls" }}
+  issuerRef:
+    name: {{ $cm.issuerRef.name }}
+    kind: {{ $cm.issuerRef.kind | default "ClusterIssuer" }}
+    group: {{ $cm.issuerRef.group | default "cert-manager.io" }}
+  dnsNames:
+    {{- toYaml $dnsNames | nindent 4 }}
+  {{- if $cm.duration }}
+  duration: {{ $cm.duration }}
+  {{- end }}
+  {{- if $cm.renewBefore }}
+  renewBefore: {{ $cm.renewBefore }}
+  {{- end }}
+{{- end }}
