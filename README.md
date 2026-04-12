@@ -112,7 +112,47 @@ helm upgrade -n unifi --create-namespace unifi unifi-os/unifi-os --install \
 The chart includes opt-in support for:
 
 - **Automated backups** via [unifi-backup](https://github.com/ConnorsApps/unifi-backup) — runs as a CronJob using a local UniFi OS admin account.
-- **Prometheus metrics** via [unpoller](https://github.com/unpoller/unpoller) — scrapes UniFi OS and exposes metrics for Prometheus.
+- **Prometheus metrics** via [unpoller](https://github.com/unpoller/unpoller) — scrapes UniFi OS and exposes metrics for Prometheus. Three auth options:
+
+  **API key** (recommended, UniFi OS 4+) — generate at Settings > Admins & Users > (your user) > API Key:
+  ```yaml
+  unifiExporter:
+    enabled: true
+    config:
+      apiKey: "your-api-key"
+  ```
+
+  **Username + password** — create a local Viewer user at Settings > Admins & Users > Add Admin > Local Access Only:
+  ```yaml
+  unifiExporter:
+    enabled: true
+    config:
+      username: "metrics"
+      password: "change-me"
+  ```
+
+  **Pre-existing Secret** — secret must contain a `password` key, an `api-key` key, or both; whichever is non-empty is used (api-key takes priority):
+  ```yaml
+  unifiExporter:
+    enabled: true
+    config:
+      username: "metrics"   # required when using password auth
+    existingSecret:
+      name: "my-unifi-exporter-secret"
+      passwordKey: password   # default
+      apiKeyKey: api-key      # default
+  ```
+
+  Additional collection options (all default to `false`):
+
+  | Field | What it collects |
+  |---|---|
+  | `saveEvents` | Client connect/disconnect and network events |
+  | `saveAlarms` | Security and network alarms |
+  | `saveAnomalies` | Detected network anomalies |
+  | `saveIds` | Device ID-to-name label mappings |
+  | `hashPii` | Hash MAC addresses and client names (privacy/compliance) |
+
 - **TLS certificate management** via cert-manager — issues and rotates the certificate used by UniFi's internal nginx, with optional Gateway API `BackendTLSPolicy` for re-encrypted backend traffic. See [TLS.md](TLS.md).
 
 All are disabled by default. See `values.env.example.yaml` and the relevant sections in `values.yaml` to enable them.

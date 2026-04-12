@@ -471,6 +471,7 @@ hull:
         type: Opaque
         stringData:
           password: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.password }}
+          api-key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.apiKey }}
     # ------------------------------------------------------------------
     # StatefulSet — single-container systemd runtime (Postgres/RMQ external; Mongo embedded).
     # ------------------------------------------------------------------
@@ -994,6 +995,13 @@ hull:
                     secretKeyRef:
                       name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
                       key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.passwordKey | quote }}
+                      optional: true
+                UP_UNIFI_DEFAULT_API_KEY:
+                  valueFrom:
+                    secretKeyRef:
+                      name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
+                      key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.apiKeyKey | quote }}
+                      optional: true
                 UP_PROMETHEUS_DISABLE:
                   value: "false"
                 UP_UNIFI_DEFAULT_VERIFY_SSL:
@@ -1004,6 +1012,16 @@ hull:
                   value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveSites | toString | quote }}
                 UP_UNIFI_DEFAULT_SAVE_DPI:
                   value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveDpi | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_EVENTS:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveEvents | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_ALARMS:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveAlarms | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_ANOMALIES:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveAnomalies | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_IDS:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveIds | toString | quote }}
+                UP_UNIFI_DEFAULT_HASH_PII:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.hashPii | toString | quote }}
                 UP_PROMETHEUS_REPORT_ERRORS:
                   value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.reportErrors | toString | quote }}
               resources:
@@ -1140,7 +1158,8 @@ backup:
 # ------------------------------------------------------------------
 # UniFi Exporter — uses https://github.com/unpoller/unpoller
 # Scrapes metrics from UniFi OS and exposes them for Prometheus.
-# Requires a local read-only UniFi OS user.
+# Auth: API key (config.apiKey), username+password (config.username/password),
+# or a pre-existing Secret (existingSecret.name). API key takes priority when non-empty.
 # ------------------------------------------------------------------
 unifiExporter:
   enabled: false
@@ -1157,16 +1176,24 @@ unifiExporter:
     username: ""
     # Ignored when existingSecret.name is set.
     password: ""
+    # API key authentication (UniFi OS 4+). Takes precedence over username/password when non-empty.
+    # Ignored when existingSecret.name is set.
+    apiKey: ""
     verifyTLS: false
     saveSites: true
     saveDpi: true
+    saveEvents: false
+    saveAlarms: false
+    saveAnomalies: false
+    saveIds: false
+    hashPii: false
     reportErrors: true
 
-  # Reference a pre-existing Secret instead of creating one from config.password above.
-  # Secret must contain the key specified by passwordKey.
+  # Reference a pre-existing Secret instead of creating one from config.password/apiKey above.
   existingSecret:
     name: ""
     passwordKey: password
+    apiKeyKey: api-key
 
   serviceMonitor:
     # Requires the Prometheus Operator CRDs to be installed.
