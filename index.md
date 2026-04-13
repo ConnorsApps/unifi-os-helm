@@ -63,6 +63,8 @@ that need Helm template logic use the `_HT!` prefix for inline [Go Helm template
 | [values.yaml](charts/unifi-os/values.yaml) | Primary chart values — StatefulSet, services, secrets, Gateway API routes. |
 | [values.env.example.yaml](values.env-example.yaml) | Environment-specific overrides (registry, passwords, hostnames). |
 | [SERVICES.md](SERVICES.md) | Reference for every UniFi OS service, its role, and dependencies. |
+| [DATABASE.md](DATABASE.md) | PostgreSQL setup — bundled CNPG and external, credential options. |
+| [TLS.md](TLS.md) | TLS certificate options — self-signed, existing secret, cert-manager. |
 | `charts/unifi-os/templates/` | HULL entrypoint, helpers, and Postgres override secrets. |
 | `scripts/` | Extraction utilities for reverse-engineering the upstream image. |
 
@@ -71,6 +73,7 @@ that need Helm template logic use the `_HT!` prefix for inline [Go Helm template
 - Kubernetes
 - Helm 3+
 - [CloudNativePG operator](https://cloudnative-pg.io/) if using the bundled PostgreSQL subchart (`postgres.enabled: true`)
+- [cert-manager](https://cert-manager.io/) if using `unifi.tls.certManager.enabled: true` (optional but recommended)
 
 ## Quick start
 
@@ -80,8 +83,20 @@ that need Helm template logic use the `_HT!` prefix for inline [Go Helm template
 cp values.env.example.yaml values.env.yaml
 ```
 
-Edit `values.env.yaml` and set real passwords for
-`global.postgres.connection.password` and `global.rabbitmq.connection.password`.
+Set credentials for PostgreSQL and RabbitMQ. The recommended approach is
+`existingSecretPrefix` for PostgreSQL (no plaintext in Helm values) — see
+[DATABASE.md](DATABASE.md) for full details. Minimal plaintext example:
+
+```yaml
+global:
+  postgres:
+    connection:
+      password: "your-pg-password"
+  rabbitmq:
+    connection:
+      password: "your-rabbit-password"
+      erlangCookie: "your-erlang-cookie"
+```
 
 ### 2. Install
 
@@ -97,9 +112,50 @@ helm upgrade -n unifi --create-namespace unifi unifi-os/unifi-os --install \
 The chart includes opt-in support for:
 
 - **Automated backups** via [unifi-backup](https://github.com/ConnorsApps/unifi-backup) — runs as a CronJob using a local UniFi OS admin account.
-- **Prometheus metrics** via [unpoller](https://github.com/unpoller/unpoller) — scrapes UniFi OS and exposes metrics for Prometheus.
+- **Prometheus metrics** via [unpoller](https://github.com/unpoller/unpoller) — scrapes UniFi OS and exposes metrics for Prometheus. Three auth options:
 
-Both are disabled by default. See `values.env.example.yaml` and the `backup` / `unifiExporter` sections in `values.yaml` to enable them.
+  **API key** (recommended, UniFi OS 4+) — generate at Settings > Admins & Users > (your user) > API Key:
+  ```yaml
+  unifiExporter:
+    enabled: true
+    config:
+      apiKey: "your-api-key"
+  ```
+
+  **Username + password** — create a local Viewer user at Settings > Admins & Users > Add Admin > Local Access Only:
+  ```yaml
+  unifiExporter:
+    enabled: true
+    config:
+      username: "metrics"
+      password: "change-me"
+  ```
+
+  **Pre-existing Secret** — secret must contain a `password` key, an `api-key` key, or both; whichever is non-empty is used (api-key takes priority):
+  ```yaml
+  unifiExporter:
+    enabled: true
+    config:
+      username: "metrics"   # required when using password auth
+    existingSecret:
+      name: "my-unifi-exporter-secret"
+      passwordKey: password   # default
+      apiKeyKey: api-key      # default
+  ```
+
+  Additional collection options (all default to `false`):
+
+  | Field | What it collects |
+  |---|---|
+  | `saveEvents` | Client connect/disconnect and network events |
+  | `saveAlarms` | Security and network alarms |
+  | `saveAnomalies` | Detected network anomalies |
+  | `saveIds` | Device ID-to-name label mappings |
+  | `hashPii` | Hash MAC addresses and client names (privacy/compliance) |
+
+- **TLS certificate management** via cert-manager — issues and rotates the certificate used by UniFi's internal nginx, with optional Gateway API `BackendTLSPolicy` for re-encrypted backend traffic. See [TLS.md](TLS.md).
+
+All are disabled by default. See `values.env.example.yaml` and the relevant sections in `values.yaml` to enable them.
 
 ## Legal
 
