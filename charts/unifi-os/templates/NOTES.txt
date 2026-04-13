@@ -11,6 +11,7 @@ WARNING: PostgreSQL host is not configured. Set global.postgres.connection.host 
 WARNING: RabbitMQ host is not configured. Set global.rabbitmq.connection.host (or rabbitmq.connection.host) when using external RabbitMQ (rabbitmq.enabled=false).
 {{- end }}
 
+
 {{- if or $pgHost $rmqHost }}
 
 Configured dependencies:

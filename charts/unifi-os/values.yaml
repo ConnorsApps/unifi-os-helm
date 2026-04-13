@@ -11,18 +11,14 @@
 # | Postgres | postgres.enabled: true | postgres.enabled: false | connection.host |
 # | RabbitMQ | rabbitmq.enabled: true | rabbitmq.enabled: false | connection.host |
 #
-# For external: set connection.host (and connection.password or existingSecret).
-# For subchart: host is derived; set connection.password for app auth.
-# global.*.connection overrides chart-local values below (umbrella charts).
-# When using global: parent can provide existing secrets, otherwise this chart
-# creates and uses the default secret names:
-#   rabbitmq: rabbitmq-auth, postgres: unifi-pg-auth
-# ------------------------------------------------------------------
-# Global connection defaults — set non-sensitive defaults here.
-# Sensitive fields (password, erlangCookie) must be set here or via
-# existingSecret unless using an umbrella chart that provides them.
-# Parent/umbrella can override; subcharts still use:
-#   rabbitmq-auth, unifi-pg-auth
+# Bundled postgres (postgres.enabled: true) uses the CloudNativePG cluster subchart.
+# Set connection.password and the chart generates all pg-login-* secrets automatically.
+# Set postgres.useExistingSecrets: true to provide your own pg-login-* secrets instead
+# (e.g. via ESO/Vault) — secret names are fixed and cannot be changed.
+#
+# For external postgres (postgres.enabled: false): set connection.host and either
+# connection.password or connection.existingSecret.
+# global.*.connection overrides chart-local values (umbrella charts).
 # ------------------------------------------------------------------
 global:
   postgres:
@@ -31,8 +27,14 @@ global:
       port: 5432
       database: unifi-core
       user: unifi-core
-      # Required unless existingSecret.name is set
+      # password: plaintext password. Chart creates unifi-pg-auth and pg-login-* secrets.
       password: ""
+      # useExistingSecrets: when true, chart expects pre-created pg-login-<rolename> secrets
+      #   (e.g. from ESO/Vault). Secret names are fixed — see DATABASE.md for the full list.
+      #   Mutually exclusive with password. Only applies when postgres.enabled: true.
+      useExistingSecrets: false
+      # existingSecret: for external postgres (postgres.enabled: false) only.
+      #   Provides PGPASSWORD to the app via secretKeyRef.
       existingSecret:
         name: ""
         passwordKey: ""
@@ -196,6 +198,18 @@ hull:
     # Services
     # ------------------------------------------------------------------
     service:
+      # Device and application communication (inform URL)
+      # Useful when backendTLSPolicy is used (unifi lacks https support for inform url)
+      http-inform:
+        enabled: true
+        type: ClusterIP
+        selector:
+          app.kubernetes.io/component: monolith
+        ports:
+          inform:
+            port: 8080
+            protocol: TCP
+            name: inform
       # Primary ClusterIP — HTTP/HTTPS application ports consumed by ingress.
       http:
         enabled: true
@@ -303,6 +317,26 @@ hull:
     # Gateway API / Istio routing objects
     # ------------------------------------------------------------------
     httproute:
+      unifi-inform:
+        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.enabled }}
+        hostnames: _HT!{{ list (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.hostname }}
+        parentRefs:
+          private:
+            kind: Gateway
+            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
+            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
+            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.sectionName }}
+        rules:
+          default:
+            backendRefs:
+              http-inform:
+                name: http-inform
+                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.backendPort }}
+            matches:
+              inform:
+                path:
+                  type: PathPrefix
+                  value: /inform
       unifi-https:
         enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.enabled }}
         hostnames: _HT!{{ list (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.hostname }}
@@ -437,6 +471,7 @@ hull:
         type: Opaque
         stringData:
           password: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.password }}
+          api-key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.apiKey }}
     # ------------------------------------------------------------------
     # StatefulSet — single-container systemd runtime (Postgres/RMQ external; Mongo embedded).
     # ------------------------------------------------------------------
@@ -511,6 +546,7 @@ hull:
                 sources:
                   - secret:
                       name: postgres-unifi-core-override
+                      optional: true
                       items:
                         - key: local.yaml
                           path: unifi-core/local.yaml
@@ -535,36 +571,43 @@ hull:
                           path: uid/logging.config.props
                   - secret:
                       name: config-override-secret-ulp-go
+                      optional: true
                       items:
                         - key: config.props
                           path: ulp-go/db.config.props
                   - secret:
                       name: config-override-secret-unifi-credential-server
+                      optional: true
                       items:
                         - key: config.props
                           path: unifi-credential-server/db.config.props
                   - secret:
                       name: config-override-secret-ucs-user-assets
+                      optional: true
                       items:
                         - key: config.props
                           path: ucs-user-assets/db.config.props
                   - secret:
                       name: config-override-secret-unifi-directory
+                      optional: true
                       items:
                         - key: config.props
                           path: unifi-directory/db.config.props
                   - secret:
                       name: config-override-secret-ucs-agent
+                      optional: true
                       items:
                         - key: config.props
                           path: ucs-agent/db.config.props
                   - secret:
                       name: config-override-secret-unifi-identity-update
+                      optional: true
                       items:
                         - key: config.props
                           path: unifi-identity-update/db.config.props
                   - secret:
                       name: config-override-secret-uid-agent
+                      optional: true
                       items:
                         - key: config.props
                           path: uid/db.config.props
@@ -573,9 +616,13 @@ hull:
                 name: discovery-shim-script
                 defaultMode: 0755
             postgres-superuser-auth:
-              enabled: true
+              enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.postgres.enabled }}
               secret:
-                secretName: _HT!{{ printf "%s-superuser" ((index . "PARENT_CONTEXT").Values.postgres.clusterName | default "unifi-postgres") }}
+                secretName: _HT!{{ printf "%s-superuser" ((index . "PARENT_CONTEXT").Values.postgres.fullnameOverride | default "unifi-postgres") }}
+            unifi-tls-secret:
+              enabled: _HT!{{ ne (include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT")) "" }}
+              secret:
+                secretName: _HT!{{ include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT") }}
           initContainers:
             wait-postgres:
               enabled: true
@@ -597,6 +644,19 @@ hull:
               env:
                 UOS_UUID:
                   value: "3403e723-3f5b-5a1e-9b88-ed7e2fcfd762"
+                PGHOST:
+                  value: _HT!{{ include "unifi-os.postgresHost" (index . "PARENT_CONTEXT") }}
+                PGPORT:
+                  value: _HT!{{ include "unifi-os.postgresPort" (index . "PARENT_CONTEXT") | quote }}
+                PGDATABASE:
+                  value: _HT!{{ include "unifi-os.postgresDatabase" (index . "PARENT_CONTEXT") }}
+                PGUSER:
+                  value: _HT!{{ include "unifi-os.postgresUser" (index . "PARENT_CONTEXT") }}
+                PGPASSWORD:
+                  valueFrom:
+                    secretKeyRef:
+                      name: _HT!{{ include "unifi-os.postgresSecretName" (index . "PARENT_CONTEXT") }}
+                      key: _HT!{{ include "unifi-os.postgresSecretPasswordKey" (index . "PARENT_CONTEXT") }}
               command:
                 - /bin/bash
                 - -c
@@ -621,6 +681,13 @@ hull:
                   _tls_crt="${_tls_dir}/unifi-core.crt"
                   _tls_key="${_tls_dir}/unifi-core.key"
                   _tls_ca="${_tls_dir}/unifi-core-ca.crt"
+                  if [ -f /run/secrets/tls/tls.crt ] && [ -f /run/secrets/tls/tls.key ]; then
+                    cp /run/secrets/tls/tls.crt "${_tls_crt}"
+                    cp /run/secrets/tls/tls.key "${_tls_key}"
+                    [ -f /run/secrets/tls/ca.crt ] && cp /run/secrets/tls/ca.crt "${_tls_ca}" || cp "${_tls_crt}" "${_tls_ca}"
+                    chown "$USER:$GROUP" "${_tls_crt}" "${_tls_key}" "${_tls_ca}" 2>/dev/null || true
+                    chmod 600 "${_tls_key}" 2>/dev/null || true
+                  fi
                   if [ ! -s "${_tls_crt}" ] || [ ! -s "${_tls_key}" ]; then
                     rm -f "${_tls_crt}" "${_tls_key}"
                     openssl req -x509 -newkey rsa:2048 -nodes \
@@ -634,8 +701,15 @@ hull:
                   fi
                   # Copy overrides from read-only projected secrets into writable /data.
                   # Service pre-start scripts chown these files, so they cannot stay read-only mounts.
+                  # When existingSecret is configured, the projected secrets are absent; configs are
+                  # generated from PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD env vars instead.
                   if [ -f /run/secrets/overrides/unifi-core/local.yaml ]; then
                     cp /run/secrets/overrides/unifi-core/local.yaml /data/unifi-core/config/overrides/local.yaml
+                    chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
+                  elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
+                    printf 'postgres:\n  host: %s\n  port: %s\n  database: %s\n  user: %s\n  password: "%s"\n' \
+                      "${PGHOST}" "${PGPORT:-5432}" "${PGDATABASE:-unifi-core}" "${PGUSER:-unifi-core}" "${PGPASSWORD}" \
+                      > /data/unifi-core/config/overrides/local.yaml
                     chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
                   fi
                   if [ -f /run/secrets/overrides/unifi-core/production.yaml ]; then
@@ -643,19 +717,24 @@ hull:
                     chown "$USER:$GROUP" /data/unifi-core/config/overrides/production.yaml 2>/dev/null || true
                   fi
                   for _entry in \
-                    "ulp-go|/data/ulp-go/ws/config.props" \
-                    "unifi-credential-server|/data/unifi-credential-server/ws/config.props" \
-                    "ucs-user-assets|/data/ucs-user-assets/ws/config.props" \
-                    "unifi-directory|/data/unifi-directory/ws/config.props" \
-                    "ucs-agent|/data/ucs-agent/ws/config.props" \
-                    "unifi-identity-update|/data/unifi-identity-update/ws/config.props" \
-                    "uid|/data/uid/ws/config.props"; do
-                    _svc="${_entry%%|*}"
-                    _dst="${_entry#*|}"
+                    "ulp-go|ulp-go|ulp-go|/data/ulp-go/ws/config.props" \
+                    "unifi-credential-server|unifi-credential-server|unifi-credential-server|/data/unifi-credential-server/ws/config.props" \
+                    "ucs-user-assets|ucs-user-assets|unifi-credential-server|/data/ucs-user-assets/ws/config.props" \
+                    "unifi-directory|unifi-directory|unifi-directory|/data/unifi-directory/ws/config.props" \
+                    "ucs-agent|ucs-agent|ucs-agent|/data/ucs-agent/ws/config.props" \
+                    "unifi-identity-update|unifi-identity-update|unifi-identity-update|/data/unifi-identity-update/ws/config.props" \
+                    "uid|uid|uid|/data/uid/ws/config.props"; do
+                    _svc="${_entry%%|*}"; _r="${_entry#*|}"
+                    _db_name="${_r%%|*}"; _r="${_r#*|}"
+                    _db_user="${_r%%|*}"; _dst="${_r#*|}"
                     _db_src="/run/secrets/overrides/${_svc}/db.config.props"
                     _log_src="/run/secrets/overrides/${_svc}/logging.config.props"
                     if [ -f "${_db_src}" ]; then
                       cp "${_db_src}" "${_dst}"
+                    elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
+                      printf 'db.name = %s\ndb.host = %s\ndb.port = %s\ndb.encrypted = false\ndb.username = %s\ndb.password = %s\n' \
+                        "${_db_name}" "${PGHOST}" "${PGPORT:-5432}" "${_db_user}" "${PGPASSWORD}" \
+                        > "${_dst}"
                     fi
                     if [ -f "${_log_src}" ]; then
                       [ -f "${_dst}" ] && printf '\n' >> "${_dst}" || true
@@ -678,6 +757,11 @@ hull:
                 override-config-secrets:
                   name: override-config-secrets
                   mountPath: /run/secrets/overrides
+                  readOnly: true
+                unifi-tls-secret:
+                  enabled: _HT!{{ ne (include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT")) "" }}
+                  name: unifi-tls-secret
+                  mountPath: /run/secrets/tls
                   readOnly: true
           containers:
             unifi-os:
@@ -814,6 +898,7 @@ hull:
                   name: cgroup
                   mountPath: /sys/fs/cgroup
                 postgres-superuser-auth:
+                  enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.postgres.enabled }}
                   name: postgres-superuser-auth
                   mountPath: /run/secrets/postgres-superuser/pgpass
                   subPath: pgpass
@@ -910,6 +995,13 @@ hull:
                     secretKeyRef:
                       name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
                       key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.passwordKey | quote }}
+                      optional: true
+                UP_UNIFI_DEFAULT_API_KEY:
+                  valueFrom:
+                    secretKeyRef:
+                      name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
+                      key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.apiKeyKey | quote }}
+                      optional: true
                 UP_PROMETHEUS_DISABLE:
                   value: "false"
                 UP_UNIFI_DEFAULT_VERIFY_SSL:
@@ -920,6 +1012,16 @@ hull:
                   value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveSites | toString | quote }}
                 UP_UNIFI_DEFAULT_SAVE_DPI:
                   value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveDpi | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_EVENTS:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveEvents | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_ALARMS:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveAlarms | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_ANOMALIES:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveAnomalies | toString | quote }}
+                UP_UNIFI_DEFAULT_SAVE_IDS:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveIds | toString | quote }}
+                UP_UNIFI_DEFAULT_HASH_PII:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.hashPii | toString | quote }}
                 UP_PROMETHEUS_REPORT_ERRORS:
                   value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.reportErrors | toString | quote }}
               resources:
@@ -1056,7 +1158,8 @@ backup:
 # ------------------------------------------------------------------
 # UniFi Exporter — uses https://github.com/unpoller/unpoller
 # Scrapes metrics from UniFi OS and exposes them for Prometheus.
-# Requires a local read-only UniFi OS user.
+# Auth: API key (config.apiKey), username+password (config.username/password),
+# or a pre-existing Secret (existingSecret.name). API key takes priority when non-empty.
 # ------------------------------------------------------------------
 unifiExporter:
   enabled: false
@@ -1073,16 +1176,24 @@ unifiExporter:
     username: ""
     # Ignored when existingSecret.name is set.
     password: ""
+    # API key authentication (UniFi OS 4+). Takes precedence over username/password when non-empty.
+    # Ignored when existingSecret.name is set.
+    apiKey: ""
     verifyTLS: false
     saveSites: true
     saveDpi: true
+    saveEvents: false
+    saveAlarms: false
+    saveAnomalies: false
+    saveIds: false
+    hashPii: false
     reportErrors: true
 
-  # Reference a pre-existing Secret instead of creating one from config.password above.
-  # Secret must contain the key specified by passwordKey.
+  # Reference a pre-existing Secret instead of creating one from config.password/apiKey above.
   existingSecret:
     name: ""
     passwordKey: password
+    apiKeyKey: api-key
 
   serviceMonitor:
     # Requires the Prometheus Operator CRDs to be installed.
@@ -1109,7 +1220,11 @@ rabbitmq:
   podSecurityContext:
     fsGroup: 999
     fsGroupChangePolicy: OnRootMismatch
-  # Subchart uses secret rabbitmq-auth (we create or you create with that name)
+  # When global.rabbitmq.connection.password is set, this chart creates "rabbitmq-auth" and the
+  # subchart reads from it. When global.rabbitmq.connection.existingSecret.name is set instead,
+  # "rabbitmq-auth" is NOT created — you must override auth.existingSecret/existingPasswordKey/
+  # existingErlangCookieKey here (or in your values file) to point at your secret.
+  # HULL _HT! cannot reach subchart pass-through values, so this cannot be done automatically.
   auth:
     enabled: true
     username: "unifi"
@@ -1130,18 +1245,26 @@ rabbitmq:
       memory: 1Gi
 
 # ------------------------------------------------------------------
-# PostgreSQL
+# PostgreSQL — CloudNativePG subchart
+#
+# Two credential modes for bundled CNPG (postgres.enabled: true):
+#
+#   useExistingSecrets: false (default)
+#     Set global.postgres.connection.password. The chart generates pg-login-<rolename>
+#     secrets and unifi-pg-auth automatically.
+#
+#   useExistingSecrets: true
+#     Create pg-login-<rolename> secrets yourself before installing (e.g. via ESO/Vault).
+#     Secret names are fixed — pg-login-unifi-core, pg-login-ulp-go, etc.
+#     Each must be type kubernetes.io/basic-auth with username and password keys.
+#
+# For external postgres (postgres.enabled: false), set connection.host and either
+# connection.password or connection.existingSecret.
 # ------------------------------------------------------------------
 postgres:
   enabled: false
   connection: {} # Optional overrides only; defaults in global.postgres.connection
-  clusterName: unifi-postgres
-  # No top-level auth block here; credentials come from global.postgres.connection
-  # and the chart-managed secret unifi-pg-auth/pg-login-* resources.
-  fullnameOverride: "unifi-postgres"
-  type: postgresql
-  version:
-    postgresql: "14"
+  fullnameOverride: unifi-postgres
   cluster:
     instances: 1
     imageName: "ghcr.io/cloudnative-pg/postgresql:14-bookworm"
@@ -1152,56 +1275,56 @@ postgres:
       database: unifi-core
       owner: unifi-core
       secret:
-        name: unifi-pg-auth
+        name: pg-login-unifi-core
     roles:
       - name: unifi-core
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-unifi-core
-        createdb: true
       - name: ulp-go
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-ulp-go
-        createdb: true
       - name: uid
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-uid
-        createdb: true
       - name: unifi-credential-server
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-unifi-credential-server
-        createdb: true
       - name: unifi-directory
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-unifi-directory
-        createdb: true
       - name: ucs-agent
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-ucs-agent
-        createdb: true
       - name: ucs-update
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-ucs-update
-        createdb: true
       - name: unifi-identity-update
         ensure: present
         login: true
+        createdb: true
         passwordSecret:
           name: pg-login-unifi-identity-update
-        createdb: true
   databases:
     - name: unifi-core
       owner: unifi-core
@@ -1224,6 +1347,35 @@ postgres:
 # UniFi
 # ------------------------------------------------------------------
 unifi:
+  tls:
+    # Name of an existing kubernetes.io/tls secret to use for UniFi's nginx.
+    # The secret must have tls.crt and tls.key keys; ca.crt is optional.
+    # Ignored when certManager.enabled — the cert-manager secret is used instead.
+    existingSecret: ""
+    certManager:
+      enabled: false
+      # Name of the Secret cert-manager will create. Also used for the volume mount.
+      secretName: unifi-tls
+      issuerRef:
+        name: ""               # required
+        kind: ClusterIssuer    # or Issuer
+        group: cert-manager.io
+      # dnsNames defaults to gateway.httpRoute.hostname when empty.
+      dnsNames: []
+      duration: 2160h          # 90 days
+      renewBefore: 360h        # 15 days
+      # backendTLSPolicy: generates a Gateway API BackendTLSPolicy so the gateway
+      # re-encrypts traffic to the UniFi backend using the issued cert.
+      backendTLSPolicy:
+        enabled: false
+        # For public CAs (Let's Encrypt etc.): set wellKnownCACertificates: System
+        # For private CAs: leave empty and set caCertificateRef to a ConfigMap with the CA cert.
+        wellKnownCACertificates: ""
+        caCertificateRef:
+          name: ""     # ConfigMap name containing the CA cert
+          key: ca.crt
+        # SNI hostname sent to the backend. Defaults to dnsNames[0] / httpRoute.hostname.
+        hostname: ""
   resources:
     requests:
       cpu: 500m
@@ -1294,6 +1446,11 @@ unifi:
     parentRef:
       name: ""
       namespace: ""
+    httpRouteInform:
+      enabled: false
+      hostname: ""
+      sectionName: ""
+      backendPort: 8080
     httpRoute:
       enabled: false
       hostname: ""

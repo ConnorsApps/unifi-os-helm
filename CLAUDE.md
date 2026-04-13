@@ -49,8 +49,6 @@ Provides functions for resolving database connections:
 - `unifi-os.rabbitmqURI` — builds RabbitMQ connection URI with password injection from secrets
 - Connection merging: `global.<service>.connection` overrides chart-local `<service>.connection` (for umbrella chart usage)
 
-### Postgres secrets (`charts/unifi-os/templates/postgres-override-secrets.yaml`)
-Generates per-service Kubernetes Secrets for PostgreSQL credentials. This is outside HULL because it requires iteration over services.
 
 ### Dockerfile
 Multi-stage build that:
@@ -86,7 +84,6 @@ Both are disabled by default; enable in values:
 | `Makefile` | Build, push, extraction targets |
 | `charts/unifi-os/values.yaml` | All K8s object definitions (HULL) + service config |
 | `charts/unifi-os/templates/_helpers.tpl` | Connection resolution helpers |
-| `charts/unifi-os/templates/postgres-override-secrets.yaml` | Per-service PG credential secrets |
 | `values.env.example.yaml` | Template for environment-specific overrides |
 | `SERVICES.md` | Reference for all ~15 UniFi OS systemd services |
 | `file-dumps/` | Extracted container configs and systemd maps (for reverse-engineering) |

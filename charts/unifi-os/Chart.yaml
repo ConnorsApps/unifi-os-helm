@@ -3,7 +3,7 @@ name: unifi-os
 description: >-
   UniFi OS Server - self-hosted UniFi management platform
 type: application
-version: 0.3.4
+version: 0.4.0
 appVersion: "5.0.6"
 dependencies:
   - name: hull
@@ -16,7 +16,6 @@ dependencies:
     version: "0.17.1"
     condition: rabbitmq.enabled
 
-  # CloudNativePG cluster dependency. Set postgres.enabled: true.
   - name: cluster
     repository: https://cloudnative-pg.github.io/charts
     version: "0.4.0"
