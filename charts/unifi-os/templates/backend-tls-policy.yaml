@@ -23,7 +23,7 @@ spec:
   targetRefs:
     - group: ""
       kind: Service
-      name: http
+      name: unifi
   validation:
     {{- if $btp.wellKnownCACertificates }}
     wellKnownCACertificates: {{ $btp.wellKnownCACertificates }}

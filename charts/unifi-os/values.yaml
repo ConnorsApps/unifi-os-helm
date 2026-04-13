@@ -191,27 +191,15 @@ hull:
           config.yaml:
             inline: |
               {{- $cfg := deepCopy .Values.backup.config -}}
-              {{- $url := .Values.backup.config.unifi.url | default (printf "https://http.%s.svc.cluster.local" .Release.Namespace) -}}
+              {{- $url := .Values.backup.config.unifi.url | default (printf "https://unifi.%s.svc.cluster.local" .Release.Namespace) -}}
               {{- $_ := set $cfg.unifi "url" $url -}}
               {{ $cfg | toYaml -}}
     # ------------------------------------------------------------------
     # Services
     # ------------------------------------------------------------------
     service:
-      # Device and application communication (inform URL)
-      # Useful when backendTLSPolicy is used (unifi lacks https support for inform url)
-      http-inform:
-        enabled: true
-        type: ClusterIP
-        selector:
-          app.kubernetes.io/component: monolith
-        ports:
-          inform:
-            port: 8080
-            protocol: TCP
-            name: inform
       # Primary ClusterIP — HTTP/HTTPS application ports consumed by ingress.
-      http:
+      unifi:
         enabled: true
         type: ClusterIP
         selector:
@@ -329,8 +317,8 @@ hull:
         rules:
           default:
             backendRefs:
-              http-inform:
-                name: http-inform
+              unifi:
+                name: unifi
                 port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.backendPort }}
             matches:
               inform:
@@ -349,8 +337,8 @@ hull:
         rules:
           default:
             backendRefs:
-              http:
-                name: http
+              unifi:
+                name: unifi
                 port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.backendPort }}
     tcproute:
       unifi-http-8080:
@@ -364,8 +352,8 @@ hull:
         rules:
           default:
             backendRefs:
-              http:
-                name: http
+              unifi:
+                name: unifi
                 port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.tcpRoute.backendPort }}
     udproute:
       unifi-ap-discovery:
@@ -987,7 +975,7 @@ hull:
                   protocol: TCP
               env:
                 UP_UNIFI_DEFAULT_URL:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.url | default (printf "https://http.%s.svc.cluster.local" ((index . "PARENT_CONTEXT").Release.Namespace)) | quote }}
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.url | default (printf "https://unifi.%s.svc.cluster.local" ((index . "PARENT_CONTEXT").Release.Namespace)) | quote }}
                 UP_UNIFI_DEFAULT_USER:
                   value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.username | quote }}
                 UP_UNIFI_DEFAULT_PASS:
@@ -1142,7 +1130,7 @@ backup:
     # yaml-language-server: $schema=https://raw.githubusercontent.com/ConnorsApps/unifi-backup/refs/heads/main/config.schema.json
     unifi:
       # Leave empty to auto-use the cluster-local service address:
-      # https://http.<namespace>.svc.cluster.local
+      # https://unifi.<namespace>.svc.cluster.local
       url: ""
       site: default
       includeDays: 0
@@ -1171,7 +1159,7 @@ unifiExporter:
 
   config:
     # UniFi OS controller URL.
-    # Leave empty to auto-derive: https://http.<namespace>.svc.cluster.local
+    # Leave empty to auto-derive: https://unifi.<namespace>.svc.cluster.local
     url: ""
     username: ""
     # Ignored when existingSecret.name is set.
@@ -1477,7 +1465,7 @@ unifi:
   istio:
     destinationRule:
       enabled: false
-      host: _HT!{{ printf "http.%s.svc.cluster.local" ((index . "PARENT_CONTEXT").Release.Namespace) }}
+      host: _HT!{{ printf "unifi.%s.svc.cluster.local" ((index . "PARENT_CONTEXT").Release.Namespace) }}
       port: 443
       tls:
         mode: SIMPLE
