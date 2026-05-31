@@ -52,24 +52,25 @@ cert-manager issues the certificate and stores it in the secret named
 `unifi.tls.certManager.secretName` (default: `unifi-tls`). The init container
 mounts and copies it exactly as in Option B.
 
-### BackendTLSPolicy
+---
+
+## BackendTLSPolicy
 
 When a gateway terminates TLS and forwards to the UniFi backend, it sends plain
 HTTP to port 443 — which nginx rejects. Enable `backendTLSPolicy` to generate a
-Gateway API `BackendTLSPolicy` that tells the gateway to re-encrypt:
+Gateway API `BackendTLSPolicy` that tells the gateway to re-encrypt.
+
+This works with any of the three certificate options above.
 
 **Public CA (Let's Encrypt etc.):**
 
 ```yaml
 unifi:
   tls:
-    certManager:
+    backendTLSPolicy:
       enabled: true
-      issuerRef:
-        name: letsencrypt-prod
-      backendTLSPolicy:
-        enabled: true
-        wellKnownCACertificates: System
+      wellKnownCACertificates: System
+      hostname: unifi.example.com   # required
 ```
 
 **Private CA:**
@@ -77,27 +78,17 @@ unifi:
 ```yaml
 unifi:
   tls:
-    certManager:
+    backendTLSPolicy:
       enabled: true
-      issuerRef:
-        name: my-internal-issuer
-      backendTLSPolicy:
-        enabled: true
-        caCertificateRef:
-          name: my-ca-configmap   # ConfigMap with ca.crt key containing the CA cert
+      caCertificateRef:
+        name: my-ca-configmap   # ConfigMap with ca.crt key containing the CA cert
+      hostname: unifi.example.com   # required
 ```
 
-### BackendTLSPolicy hostname
-
-The SNI hostname sent to the backend defaults to `dnsNames[0]` (or
-`gateway.httpRoute.hostname`). Override with:
-
-```yaml
-      backendTLSPolicy:
-        enabled: true
-        wellKnownCACertificates: System
-        hostname: unifi.example.com
-```
+`hostname`, and exactly one of `wellKnownCACertificates` or `caCertificateRef.name`,
+must be set. The hostname must match the SNI name on the certificate UniFi's nginx
+presents (typically the same value as `certManager.dnsNames` or your `existingSecret`
+certificate's CN/SAN).
 
 ---
 
@@ -106,5 +97,5 @@ The SNI hostname sent to the backend defaults to `dnsNames[0]` (or
 | Option | Secret source | BackendTLSPolicy |
 |--------|--------------|-----------------|
 | Self-signed | Generated at init time | Not practical (no verifiable CA) |
-| `existingSecret` | You provide | Possible with `caCertificateRef` if you have the CA |
+| `existingSecret` | You provide | Use `caCertificateRef` if you have the CA ConfigMap |
 | `certManager` | cert-manager issues | `wellKnownCACertificates: System` for public CAs |

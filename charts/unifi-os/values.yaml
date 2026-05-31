@@ -398,20 +398,6 @@ hull:
               udp:
                 name: udp
                 port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.syslog.backendPort }}
-    customresource:
-      unifi-tls:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.enabled }}
-        apiVersion: networking.istio.io/v1
-        kind: DestinationRule
-        spec:
-          host: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.host }}
-          trafficPolicy:
-            portLevelSettings:
-              - port:
-                  number: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.port }}
-                tls:
-                  mode: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.tls.mode }}
-                  insecureSkipVerify: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.istio.destinationRule.tls.insecureSkipVerify }}
     # ------------------------------------------------------------------
     # ServiceMonitor — opt-in Prometheus scrape config for UniFi exporter.
     # Requires the Prometheus Operator CRDs to be installed.
@@ -1352,18 +1338,18 @@ unifi:
       dnsNames: []
       duration: 2160h          # 90 days
       renewBefore: 360h        # 15 days
-      # backendTLSPolicy: generates a Gateway API BackendTLSPolicy so the gateway
-      # re-encrypts traffic to the UniFi backend using the issued cert.
-      backendTLSPolicy:
-        enabled: false
-        # For public CAs (Let's Encrypt etc.): set wellKnownCACertificates: System
-        # For private CAs: leave empty and set caCertificateRef to a ConfigMap with the CA cert.
-        wellKnownCACertificates: ""
-        caCertificateRef:
-          name: ""     # ConfigMap name containing the CA cert
-          key: ca.crt
-        # SNI hostname sent to the backend. Defaults to dnsNames[0] / httpRoute.hostname.
-        hostname: ""
+    # BackendTLSPolicy: generates a Gateway API BackendTLSPolicy so the gateway
+    # re-encrypts traffic to the UniFi backend using the issued cert.
+    backendTLSPolicy:
+      enabled: false
+      # For public CAs (Let's Encrypt etc.): set wellKnownCACertificates: System
+      # For private CAs: leave empty and set caCertificateRef to a ConfigMap with the CA cert.
+      wellKnownCACertificates: ""
+      caCertificateRef:
+        name: ""     # ConfigMap name containing the CA cert
+        key: ca.crt
+      # SNI hostname sent to the backend. Required when enabled.
+      hostname: ""
   resources:
     requests:
       cpu: 500m
@@ -1461,12 +1447,3 @@ unifi:
         enabled: false
         sectionName: ""
         backendPort: 5514
-  # Optional Istio DestinationRule for ignoring Unifi's self signed certificates
-  istio:
-    destinationRule:
-      enabled: false
-      host: _HT!{{ printf "unifi.%s.svc.cluster.local" ((index . "PARENT_CONTEXT").Release.Namespace) }}
-      port: 443
-      tls:
-        mode: SIMPLE
-        insecureSkipVerify: true

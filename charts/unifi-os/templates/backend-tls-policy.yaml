@@ -1,12 +1,7 @@
-{{- if and .Values.unifi.tls.certManager.enabled .Values.unifi.tls.certManager.backendTLSPolicy.enabled }}
-{{- $cm := .Values.unifi.tls.certManager }}
-{{- $btp := $cm.backendTLSPolicy }}
-{{- $hostname := $btp.hostname }}
-{{- if not $hostname }}
-{{- $hostname = $cm.dnsNames | first }}
-{{- end }}
-{{- if and (not $hostname) .Values.unifi.gateway.httpRoute.hostname }}
-{{- $hostname = .Values.unifi.gateway.httpRoute.hostname }}
+{{- if .Values.unifi.tls.backendTLSPolicy.enabled }}
+{{- $btp := .Values.unifi.tls.backendTLSPolicy }}
+{{- if not $btp.hostname }}
+{{- fail "backendTLSPolicy requires hostname" }}
 {{- end }}
 {{- if not (or $btp.wellKnownCACertificates $btp.caCertificateRef.name) }}
 {{- fail "backendTLSPolicy requires either wellKnownCACertificates or caCertificateRef.name" }}
@@ -34,5 +29,5 @@ spec:
         name: {{ $btp.caCertificateRef.name }}
         key: {{ $btp.caCertificateRef.key | default "ca.crt" }}
     {{- end }}
-    hostname: {{ $hostname | quote }}
+    hostname: {{ $btp.hostname | quote }}
 {{- end }}
