@@ -108,10 +108,10 @@ RUN find /bundle/rootfs/dev -mindepth 1 -delete 2>/dev/null || true
 
 # /usr/lib/platform — generated at build time from uname -m. Matches UniFi installer naming.
 RUN mkdir -p /bundle/rootfs/usr/lib \
-    && case "$$(uname -m)" in \
+    && case "$(uname -m)" in \
          x86_64)   echo -n linux-x64 ;; \
          aarch64)  echo -n linux-arm64 ;; \
-         *)        echo -n "linux-$$(uname -m)" ;; \
+         *)        echo -n "linux-$(uname -m)" ;; \
        esac > /bundle/rootfs/usr/lib/platform
 
 RUN set -eu \
@@ -123,12 +123,47 @@ RUN set -eu \
     && echo "UOSSERVER.0000000.${_version}.0000000.000000.0000" > /bundle/rootfs/usr/lib/version
 
 # Patch upstream nginx logging to container stdio without replacing the full file.
+#
+# NOTE: nginx.conf.disabled is deliberately NOT patched here, even though
+# unifi-core's ExecStartPre hook (hooks/pre-start) copies it over nginx.conf
+# on every service start (making a same-content patch there the only way to
+# survive that copy). Redirecting error_log/access_log to /dev/stderr or
+# /dev/stdout makes nginx fail hard on startup under this systemd unit:
+# nginx.service's stdio is journald-backed (a socket), and opening the
+# /dev/stderr symlink against a socket-backed fd fails with
+# "open() /dev/stderr failed (6: No such device or address)" — verified live
+# against 5.1.21, where it took nginx down entirely (readiness probe never
+# passes, no auto-restart). Until nginx.service's stdio is wired to something
+# openable as a real file (e.g. /proc/1/fd/2, PID 1's own pipe) or the
+# pre-start copy is patched, nginx logs stay on disk in nginx.conf.disabled —
+# same as before this patch existed.
 RUN set -e \
     && NGINX_CONF=/bundle/rootfs/etc/nginx/nginx.conf \
     && [ -f "$NGINX_CONF" ] \
     && sed -E -i 's|^[[:space:]]*access_log[[:space:]]+/data/unifi-core/logs/nginx-access\.log[[:space:]]+apm;|    access_log /dev/stdout apm;|' "$NGINX_CONF" \
     && sed -E -i 's|^[[:space:]]*error_log[[:space:]]+/data/unifi-core/logs/nginx-error\.log;|    error_log /dev/stderr;|' "$NGINX_CONF" \
     && sed -E -i 's|^[[:space:]]*error_log[[:space:]]+/var/log/nginx/error\.log[[:space:]]+notice;|error_log  /dev/stderr notice;|' "$NGINX_CONF"
+
+# mongodb.service's unit ships with no ExecStartPre to create /var/log/mongodb,
+# and the directory isn't present in the extracted rootfs — mongod fails hard
+# on every boot with "FileNotOpen: Failed to open /var/log/mongodb/mongodb.log"
+# (verified live, pre-existing in the extracted image, unrelated to any patch
+# in this Dockerfile). A build-time mkdir isn't enough: this chart mounts
+# separate volumes at /var/log and /var/lib/mongodb, which shadow anything
+# baked into the image at those paths — and the /var/lib/mongodb volume is
+# owned root:root, which mongod (running as User=mongodb) can't write to
+# either (IllegalOperation: Attempted to create a lock file on a read-only
+# directory). Use an ExecStartPre drop-in so both are fixed up at every start
+# regardless of what's mounted there. The "+" prefix runs these steps as root
+# even though the unit's own User=/Group=mongodb would otherwise apply to
+# ExecStartPre too.
+RUN mkdir -p /bundle/rootfs/etc/systemd/system/mongodb.service.d \
+    && printf '%s\n' \
+         '[Service]' \
+         'ExecStartPre=+/bin/mkdir -p /var/log/mongodb' \
+         'ExecStartPre=+/bin/chown mongodb:mongodb /var/log/mongodb' \
+         'ExecStartPre=+/bin/chown mongodb:mongodb /var/lib/mongodb' \
+         > /bundle/rootfs/etc/systemd/system/mongodb.service.d/log-dir.conf
 
 # Wrap timedatectl to report NTPSynchronized=yes.
 # systemd-timesyncd is not present in the extracted image. In Kubernetes the

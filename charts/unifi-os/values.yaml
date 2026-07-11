@@ -54,7 +54,7 @@ global:
 
 image:
   repository: "ghcr.io/connorsapps/unifi-os"
-  tag: "5.0.6"
+  tag: "5.1.21"
 
 hull:
   config:

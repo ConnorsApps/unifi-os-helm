@@ -59,7 +59,7 @@ that need Helm template logic use the `_HT!` prefix for inline [Go Helm template
 |------|---------|
 | [Dockerfile](Dockerfile) | Extracts the upstream OCI image and repackages it as a standard Docker image. |
 | [Makefile](Makefile) | Build/push the image, extract configs, dump systemd maps. |
-| [Chart.yaml](charts/unifi-os/Chart.yaml) | Helm chart definition (app version 5.0.6) with subchart dependencies. |
+| [Chart.yaml](charts/unifi-os/Chart.yaml) | Helm chart definition (app version 5.1.21) with subchart dependencies. |
 | [values.yaml](charts/unifi-os/values.yaml) | Primary chart values — StatefulSet, services, secrets, Gateway API routes. |
 | [values.env.example.yaml](values.env-example.yaml) | Environment-specific overrides (registry, passwords, hostnames). |
 | [SERVICES.md](SERVICES.md) | Reference for every UniFi OS service, its role, and dependencies. |
