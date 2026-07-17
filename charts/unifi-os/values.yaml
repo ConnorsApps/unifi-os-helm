@@ -764,8 +764,33 @@ hull:
                   UNIFI_MQ_ENABLED=true
                   RABBITMQ_URI=${RABBITMQ_URI}
                   EOF
-                  # MongoDB runs embedded via the bundled mongodb.service unit.
-                  # No db_uri override needed — UniFi Network uses localhost by default.
+                  # MongoDB: embedded by default (bundled mongodb.service).
+                  # When unifi.externalMongo.uri is set, MONGO_URI is non-empty:
+                  # write db.mongo.local=false + db.mongo.uri / statdb.mongo.uri
+                  # into system.properties — the file the Java Network controller
+                  # actually reads (env vars are NOT read by the controller) — and
+                  # disable the embedded mongod so it never starts.
+                  if [ -n "${MONGO_URI}" ]; then
+                    SP=/var/lib/unifi/system.properties
+                    touch "$SP"
+                    # Only append a query string when params are actually set,
+                    # so an empty value never leaks into the connection string.
+                    _q=""
+                    case "${MONGO_PARAMS}" in
+                      "") _q="" ;;
+                      *) _q="?${MONGO_PARAMS}" ;;
+                    esac
+                    sed -i -E '/^(db\.mongo\.local|db\.mongo\.uri|statdb\.mongo\.uri)[[:space:]]*=/d' "$SP"
+                    {
+                      echo "db.mongo.local=false"
+                      echo "db.mongo.uri=${MONGO_URI}/ace${_q}"
+                      echo "statdb.mongo.uri=${MONGO_URI}/ace_stat${_q}"
+                    } >> "$SP"
+                    chown unifi:unifi "$SP" 2>/dev/null || true
+                    # Prevent the bundled embedded mongod from starting.
+                    rm -f /etc/systemd/system/multi-user.target.wants/mongodb.service
+                    rm -f /usr/bin/mongod
+                  fi
                   # Run systemd as PID 1 so bundled UniFi services are managed
                   # by their native unit files inside the monolith container.
                   exec /sbin/init
@@ -783,6 +808,11 @@ hull:
                       key: _HT!{{ include "unifi-os.rabbitmqSecretPasswordKey" (index . "PARENT_CONTEXT") }}
                 RABBITMQ_URI:
                   value: _HT!{{ include "unifi-os.rabbitmqURI" (index . "PARENT_CONTEXT") }}
+                # External MongoDB for the Network app (empty = embedded default).
+                MONGO_URI:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.externalMongo.uri | default "" }}
+                MONGO_PARAMS:
+                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.externalMongo.params | default "" }}
               ports:
                 inform:
                   containerPort: 8080
@@ -1321,6 +1351,23 @@ postgres:
 # UniFi
 # ------------------------------------------------------------------
 unifi:
+  # External MongoDB for the Network application (ace / ace_stat databases).
+  #
+  # By default MongoDB is embedded (bundled mongod + mongodb.service). Set uri
+  # to move the Network controller's databases onto an external MongoDB — the
+  # pre-start hook then writes db.mongo.local=false plus db.mongo.uri /
+  # statdb.mongo.uri into /var/lib/unifi/system.properties (the mechanism the
+  # Java controller actually reads) and disables the embedded mongod.
+  #
+  # NOTE: this only relocates the Network app's data. It does NOT make the
+  # controller horizontally scalable — the monolith is single-writer and must
+  # stay at replicas: 1. HA comes from fast reschedule + HA datastores, not
+  # from multiple controller replicas (two controllers on one dataset corrupt
+  # state). For a production external MongoDB, use a replica set and set
+  # params accordingly (e.g. replicaSet=rs0&authSource=admin).
+  externalMongo:
+    uri: ""      # e.g. mongodb://user:pass@mongodb.db.svc.cluster.local:27017
+    params: ""   # query string appended after ? (e.g. authSource=admin); empty = none
   tls:
     # Name of an existing kubernetes.io/tls secret to use for UniFi's nginx.
     # The secret must have tls.crt and tls.key keys; ca.crt is optional.
