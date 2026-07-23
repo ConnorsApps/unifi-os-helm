@@ -13,7 +13,7 @@ Makefile
 .git/*
 .cursor/
 .cursor/*
-.tmp-hull/
-.tmp-hull/*
+
+.render-test/
 
 *.md

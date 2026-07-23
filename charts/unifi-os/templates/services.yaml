@@ -1,0 +1,141 @@
+# Default UniFi OS HTTPS site served by unifi-core/nginx.
+{{- $unifiAnnotations := merge (deepCopy (.Values.unifi.service.annotations | default dict)) (.Values.commonAnnotations | default dict) }}
+{{- $hotspotAnnotations := merge (deepCopy (.Values.unifi.hotspotService.annotations | default dict)) (.Values.commonAnnotations | default dict) }}
+{{- $udpAnnotations := merge (deepCopy (.Values.unifi.udpService.annotations | default dict)) (.Values.commonAnnotations | default dict) }}
+{{- $exporterAnnotations := merge (deepCopy (.Values.unifiExporter.service.annotations | default dict)) (.Values.commonAnnotations | default dict) }}
+# Primary ClusterIP — HTTP/HTTPS application ports consumed by ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: unifi
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with $unifiAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.unifi.service.type | default "ClusterIP" }}
+  selector:
+    {{- include "unifi-os.selectorLabels" (dict "root" . "component" "monolith") | nindent 4 }}
+  ports:
+    # Default UniFi OS HTTPS site served by unifi-core/nginx.
+    # This listener serves /, /manage, /proxy/network, etc.
+    - name: https
+      port: 443
+      protocol: TCP
+    # Device and application communication (inform URL)
+    - name: inform
+      port: 8080
+      protocol: TCP
+    # UniFi Network Application GUI/API
+    - name: network-app
+      port: 8443
+      protocol: TCP
+    # UniFi Identity Hub
+    - name: id-hub
+      port: 9543
+      protocol: TCP
+    # Site Supervisor
+    - name: site-supervisor
+      port: 11084
+      protocol: TCP
+    # UniFi mobile speed test
+    - name: speedtest
+      port: 6789
+      protocol: TCP
+    # Secure Hotspot portal
+    - name: hotspot-secure
+      port: 8444
+      protocol: TCP
+    # RTP control
+    - name: rtp
+      port: 5005
+      protocol: TCP
+---
+# Hotspot portal redirect ports — separate service so they can be
+# mapped through the ingress TCP config independently.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hotspot
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with $hotspotAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.unifi.hotspotService.type | default "ClusterIP" }}
+  selector:
+    {{- include "unifi-os.selectorLabels" (dict "root" . "component" "monolith") | nindent 4 }}
+  ports:
+    - name: redirect-0
+      port: 8880
+      protocol: TCP
+    - name: redirect-1
+      port: 8881
+      protocol: TCP
+    - name: redirect-2
+      port: 8882
+      protocol: TCP
+---
+# UDP ports — expose these through your cluster edge (Gateway API,
+# ingress controller TCP/UDP mappings, LoadBalancer, or NodePort).
+apiVersion: v1
+kind: Service
+metadata:
+  name: udp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with $udpAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.unifi.udpService.type | default "ClusterIP" }}
+  {{- with .Values.unifi.udpService.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
+  selector:
+    {{- include "unifi-os.selectorLabels" (dict "root" . "component" "monolith") | nindent 4 }}
+  ports:
+    # STUN — required for device adoption and Remote Management
+    - name: stun
+      port: 3478
+      protocol: UDP
+    # Remote syslog capture
+    - name: syslog
+      port: 5514
+      protocol: UDP
+    # Device discovery during adoption
+    - name: discovery
+      port: 10003
+      protocol: UDP
+{{- if .Values.unifiExporter.enabled }}
+---
+# Metrics endpoint for the optional UniFi exporter.
+apiVersion: v1
+kind: Service
+metadata:
+  name: unifi-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with $exporterAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.unifiExporter.service.type | default "ClusterIP" }}
+  selector:
+    {{- include "unifi-os.selectorLabels" (dict "root" . "component" "unifi-exporter") | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 9130
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

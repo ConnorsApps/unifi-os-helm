@@ -1,0 +1,154 @@
+# ------------------------------------------------------------------
+# Gateway API / Istio routing objects
+# ------------------------------------------------------------------
+{{- if .Values.unifi.gateway.httpRouteInform.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: unifi-inform
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - kind: Gateway
+      name: {{ .Values.unifi.gateway.parentRef.name | quote }}
+      namespace: {{ .Values.unifi.gateway.parentRef.namespace | quote }}
+      sectionName: {{ .Values.unifi.gateway.httpRouteInform.sectionName | quote }}
+  hostnames:
+    - {{ .Values.unifi.gateway.httpRouteInform.hostname | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /inform
+      backendRefs:
+        - name: unifi
+          port: {{ .Values.unifi.gateway.httpRouteInform.backendPort }}
+{{- end }}
+{{- if .Values.unifi.gateway.httpRoute.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: unifi-https
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - kind: Gateway
+      name: {{ .Values.unifi.gateway.parentRef.name | quote }}
+      namespace: {{ .Values.unifi.gateway.parentRef.namespace | quote }}
+      sectionName: {{ .Values.unifi.gateway.httpRoute.sectionName | quote }}
+  hostnames:
+    - {{ .Values.unifi.gateway.httpRoute.hostname | quote }}
+  rules:
+    - backendRefs:
+        - name: unifi
+          port: {{ .Values.unifi.gateway.httpRoute.backendPort }}
+{{- end }}
+{{- if .Values.unifi.gateway.tcpRoute.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: unifi-http-8080
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - kind: Gateway
+      name: {{ .Values.unifi.gateway.parentRef.name | quote }}
+      namespace: {{ .Values.unifi.gateway.parentRef.namespace | quote }}
+      sectionName: {{ .Values.unifi.gateway.tcpRoute.sectionName | quote }}
+  rules:
+    - backendRefs:
+        - name: unifi
+          port: {{ .Values.unifi.gateway.tcpRoute.backendPort }}
+{{- end }}
+{{- if .Values.unifi.gateway.udpRoutes.discovery.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: unifi-ap-discovery
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - kind: Gateway
+      name: {{ .Values.unifi.gateway.parentRef.name | quote }}
+      namespace: {{ .Values.unifi.gateway.parentRef.namespace | quote }}
+      sectionName: {{ .Values.unifi.gateway.udpRoutes.discovery.sectionName | quote }}
+  rules:
+    - backendRefs:
+        - name: udp
+          port: {{ .Values.unifi.gateway.udpRoutes.discovery.backendPort }}
+{{- end }}
+{{- if .Values.unifi.gateway.udpRoutes.stun.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: unifi-stun
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - kind: Gateway
+      name: {{ .Values.unifi.gateway.parentRef.name | quote }}
+      namespace: {{ .Values.unifi.gateway.parentRef.namespace | quote }}
+      sectionName: {{ .Values.unifi.gateway.udpRoutes.stun.sectionName | quote }}
+  rules:
+    - backendRefs:
+        - name: udp
+          port: {{ .Values.unifi.gateway.udpRoutes.stun.backendPort }}
+{{- end }}
+{{- if .Values.unifi.gateway.udpRoutes.syslog.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: unifi-remote-syslog
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - kind: Gateway
+      name: {{ .Values.unifi.gateway.parentRef.name | quote }}
+      namespace: {{ .Values.unifi.gateway.parentRef.namespace | quote }}
+      sectionName: {{ .Values.unifi.gateway.udpRoutes.syslog.sectionName | quote }}
+  rules:
+    - backendRefs:
+        - name: udp
+          port: {{ .Values.unifi.gateway.udpRoutes.syslog.backendPort }}
+{{- end }}

@@ -1,0 +1,26 @@
+# ------------------------------------------------------------------
+# ServiceMonitor — opt-in Prometheus scrape config for UniFi exporter.
+# Requires the Prometheus Operator CRDs to be installed.
+# ------------------------------------------------------------------
+{{- if and .Values.unifiExporter.enabled .Values.unifiExporter.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: unifi-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: unifi-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.unifiExporter.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.unifiExporter.serviceMonitor.scrapeTimeout | quote }}
+{{- end }}

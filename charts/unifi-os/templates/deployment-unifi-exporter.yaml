@@ -1,0 +1,168 @@
+# ------------------------------------------------------------------
+# UniFi Exporter Deployment — https://github.com/unpoller/unpoller
+# ------------------------------------------------------------------
+{{- if .Values.unifiExporter.enabled }}
+{{- $podAnnotations := merge (deepCopy (.Values.unifiExporter.podAnnotations | default dict)) (.Values.commonAnnotations | default dict) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unifi-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "unifi-exporter") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "unifi-os.selectorLabels" (dict "root" . "component" "unifi-exporter") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "unifi-os.labels" (dict "root" . "component" "unifi-exporter") | nindent 8 }}
+      {{- with $podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifiExporter.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifiExporter.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifiExporter.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifiExporter.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifiExporter.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- if .Values.unifiExporter.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.unifiExporter.terminationGracePeriodSeconds }}
+      {{- end }}
+      {{- with .Values.unifiExporter.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifiExporter.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.unifiExporter.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifiExporter.dnsPolicy }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with .Values.unifiExporter.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifiExporter.resourceClaims }}
+      resourceClaims:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: main
+          image: "{{ .Values.unifiExporter.image.repository }}:{{ .Values.unifiExporter.image.tag }}"
+          imagePullPolicy: {{ .Values.unifiExporter.image.pullPolicy | quote }}
+          {{- with .Values.unifiExporter.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 9130
+              protocol: TCP
+          env:
+            - name: UP_UNIFI_DEFAULT_URL
+              value: {{ .Values.unifiExporter.config.url | default (printf "https://unifi.%s.svc.cluster.local" .Release.Namespace) | quote }}
+            - name: UP_UNIFI_DEFAULT_USER
+              value: {{ .Values.unifiExporter.config.username | quote }}
+            - name: UP_UNIFI_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
+                  key: {{ .Values.unifiExporter.existingSecret.passwordKey | quote }}
+                  optional: true
+            - name: UP_UNIFI_DEFAULT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
+                  key: {{ .Values.unifiExporter.existingSecret.apiKeyKey | quote }}
+                  optional: true
+            - name: UP_PROMETHEUS_DISABLE
+              value: "false"
+            - name: UP_UNIFI_DEFAULT_VERIFY_SSL
+              value: {{ .Values.unifiExporter.config.verifyTLS | toString | quote }}
+            - name: UP_INFLUXDB_DISABLE
+              value: "true"
+            - name: UP_UNIFI_DEFAULT_SAVE_SITES
+              value: {{ .Values.unifiExporter.config.saveSites | toString | quote }}
+            - name: UP_UNIFI_DEFAULT_SAVE_DPI
+              value: {{ .Values.unifiExporter.config.saveDpi | toString | quote }}
+            - name: UP_UNIFI_DEFAULT_SAVE_EVENTS
+              value: {{ .Values.unifiExporter.config.saveEvents | toString | quote }}
+            - name: UP_UNIFI_DEFAULT_SAVE_ALARMS
+              value: {{ .Values.unifiExporter.config.saveAlarms | toString | quote }}
+            - name: UP_UNIFI_DEFAULT_SAVE_ANOMALIES
+              value: {{ .Values.unifiExporter.config.saveAnomalies | toString | quote }}
+            - name: UP_UNIFI_DEFAULT_SAVE_IDS
+              value: {{ .Values.unifiExporter.config.saveIds | toString | quote }}
+            - name: UP_UNIFI_DEFAULT_HASH_PII
+              value: {{ .Values.unifiExporter.config.hashPii | toString | quote }}
+            - name: UP_PROMETHEUS_REPORT_ERRORS
+              value: {{ .Values.unifiExporter.config.reportErrors | toString | quote }}
+            {{- with .Values.unifiExporter.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ .Values.unifiExporter.resources.requests.cpu | quote }}
+              memory: {{ .Values.unifiExporter.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.unifiExporter.resources.limits.cpu | quote }}
+              memory: {{ .Values.unifiExporter.resources.limits.memory | quote }}
+            {{- with .Values.unifiExporter.resources.claims }}
+            claims:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+          {{- with .Values.unifiExporter.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      {{- with .Values.unifiExporter.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

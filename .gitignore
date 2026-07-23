@@ -8,3 +8,6 @@ file-dumps/
 
 values.env.yaml
 install.sh
+
+.render-test/
+scripts/test-render-compat.sh

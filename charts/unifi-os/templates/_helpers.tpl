@@ -6,11 +6,51 @@ Chart name for unifi-os.
 {{- end -}}
 
 {{/*
-Shared labels for chart-managed resources.
+Fail fast if deprecated hull.* values are still set. This chart was migrated
+off HULL (vidispine/hull) to plain Helm templates — a leftover `hull:` block
+in a values file is silently ignored otherwise, which is worse than an error.
 */}}
-{{- define "unifi-os.standardLabels" -}}
-app.kubernetes.io/name: {{ include "unifi-os.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
+{{- define "unifi-os.rejectHullValues" -}}
+{{- if .Values.hull }}
+{{- fail "values.hull.* is set but this chart no longer uses HULL (vidispine/hull) — it was migrated to plain Helm templates and the `hull:` key has no effect. Remove it from your values file. See values.env.example.yaml for the equivalent curated override values (nodeSelector, affinity, tolerations, extraEnv, extraVolumes, securityContext, resourceClaims, service.type/annotations, etc.)." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"helm.sh/chart" label value: <Chart.Name>-<Chart.Version>.
+*/}}
+{{- define "unifi-os.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+Selector labels for a resource/pod template.
+Usage: {{ include "unifi-os.selectorLabels" (dict "root" . "component" "monolith") }}
+"component" is optional — omit or pass "" to skip app.kubernetes.io/component.
+*/}}
+{{- define "unifi-os.selectorLabels" -}}
+{{- $root := .root -}}
+{{- $component := .component | default "" -}}
+app.kubernetes.io/name: {{ include "unifi-os.name" $root }}
+app.kubernetes.io/instance: {{ $root.Release.Name }}
+{{- if $component }}
+app.kubernetes.io/component: {{ $component }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Full set of standard labels for a resource, merged with .Values.commonLabels.
+Usage: {{ include "unifi-os.labels" (dict "root" . "component" "monolith") | nindent 4 }}
+*/}}
+{{- define "unifi-os.labels" -}}
+{{- $root := .root -}}
+helm.sh/chart: {{ include "unifi-os.chart" $root }}
+{{ include "unifi-os.selectorLabels" . }}
+app.kubernetes.io/managed-by: {{ $root.Release.Service }}
+app.kubernetes.io/version: {{ $root.Chart.AppVersion | quote }}
+{{- with $root.Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
 {{- end -}}
 
 {{/*

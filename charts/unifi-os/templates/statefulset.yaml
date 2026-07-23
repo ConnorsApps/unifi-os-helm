@@ -1,0 +1,569 @@
+# ------------------------------------------------------------------
+# StatefulSet — single-container systemd runtime (Postgres/RMQ external; Mongo embedded).
+# ------------------------------------------------------------------
+{{- include "unifi-os.rejectHullValues" . }}
+{{- $tlsSecretName := include "unifi-os.unifiTLSSecretName" . }}
+{{- $podAnnotations := merge (deepCopy (.Values.unifi.podAnnotations | default dict)) (.Values.commonAnnotations | default dict) }}
+{{- $unifiSecurityContext := mergeOverwrite (dict "privileged" true "runAsUser" 0) (deepCopy (.Values.unifi.securityContext | default dict)) }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: monolith
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "unifi-os.labels" (dict "root" . "component" "monolith") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "unifi-os.selectorLabels" (dict "root" . "component" "monolith") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "unifi-os.labels" (dict "root" . "component" "monolith") | nindent 8 }}
+        {{- with .Values.unifi.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifi.serviceAccountName }}
+      serviceAccountName: {{ . }}
+      {{- end }}
+      {{- with .Values.unifi.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifi.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- if .Values.unifi.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.unifi.terminationGracePeriodSeconds }}
+      {{- end }}
+      {{- with .Values.unifi.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifi.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.unifi.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifi.dnsPolicy }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with .Values.unifi.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.unifi.resourceClaims }}
+      resourceClaims:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-postgres
+          image: busybox
+          env:
+            - name: PGHOST
+              value: {{ include "unifi-os.postgresHost" . | quote }}
+            - name: PGPORT
+              value: "5432"
+          command:
+            - sh
+            - -c
+            - until nc -z -w 2 "$PGHOST" "${PGPORT:-5432}"; do sleep 2; done
+        - name: init
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          env:
+            - name: UOS_UUID
+              value: "3403e723-3f5b-5a1e-9b88-ed7e2fcfd762"
+            - name: PGHOST
+              value: {{ include "unifi-os.postgresHost" . | quote }}
+            - name: PGPORT
+              value: {{ include "unifi-os.postgresPort" . | quote }}
+            - name: PGDATABASE
+              value: {{ include "unifi-os.postgresDatabase" . | quote }}
+            - name: PGUSER
+              value: {{ include "unifi-os.postgresUser" . | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "unifi-os.postgresSecretName" . }}
+                  key: {{ include "unifi-os.postgresSecretPasswordKey" . }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export USER=unifi-core GROUP=unifi-core
+              /usr/share/unifi-core/app/hooks/pre-start 2>/dev/null || true
+              mkdir -p \
+                /data/unifi-core/config/http \
+                /data/unifi-core/config/overrides \
+                /data/unifi-core/logs \
+                /data/ulp-go/ws \
+                /data/unifi-credential-server/ws \
+                /data/unifi-directory/ws \
+                /data/ucs-agent/ws \
+                /data/uid/ws \
+                /data/unifi-identity-update/ws \
+                /data/ucs-user-assets/ws \
+                /srv/unifi-core \
+                /persistent
+              _tls_dir=/data/unifi-core/config
+              _tls_crt="${_tls_dir}/unifi-core.crt"
+              _tls_key="${_tls_dir}/unifi-core.key"
+              _tls_ca="${_tls_dir}/unifi-core-ca.crt"
+              if [ -f /run/secrets/tls/tls.crt ] && [ -f /run/secrets/tls/tls.key ]; then
+                cp /run/secrets/tls/tls.crt "${_tls_crt}"
+                cp /run/secrets/tls/tls.key "${_tls_key}"
+                [ -f /run/secrets/tls/ca.crt ] && cp /run/secrets/tls/ca.crt "${_tls_ca}" || cp "${_tls_crt}" "${_tls_ca}"
+                chown "$USER:$GROUP" "${_tls_crt}" "${_tls_key}" "${_tls_ca}" 2>/dev/null || true
+                chmod 600 "${_tls_key}" 2>/dev/null || true
+              fi
+              if [ ! -s "${_tls_crt}" ] || [ ! -s "${_tls_key}" ]; then
+                rm -f "${_tls_crt}" "${_tls_key}"
+                openssl req -x509 -newkey rsa:2048 -nodes \
+                  -keyout "${_tls_key}" \
+                  -out "${_tls_crt}" \
+                  -days 3650 \
+                  -subj "/CN=unifi.local" >/dev/null 2>&1 || true
+                [ -s "${_tls_crt}" ] && [ ! -s "${_tls_ca}" ] && cp "${_tls_crt}" "${_tls_ca}" || true
+                chown "$USER:$GROUP" "${_tls_crt}" "${_tls_key}" "${_tls_ca}" 2>/dev/null || true
+                chmod 600 "${_tls_key}" 2>/dev/null || true
+              fi
+              # Copy overrides from read-only projected secrets into writable /data.
+              # Service pre-start scripts chown these files, so they cannot stay read-only mounts.
+              # When existingSecret is configured, the projected secrets are absent; configs are
+              # generated from PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD env vars instead.
+              if [ -f /run/secrets/overrides/unifi-core/local.yaml ]; then
+                cp /run/secrets/overrides/unifi-core/local.yaml /data/unifi-core/config/overrides/local.yaml
+                chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
+              elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
+                printf 'postgres:\n  host: %s\n  port: %s\n  database: %s\n  user: %s\n  password: "%s"\n' \
+                  "${PGHOST}" "${PGPORT:-5432}" "${PGDATABASE:-unifi-core}" "${PGUSER:-unifi-core}" "${PGPASSWORD}" \
+                  > /data/unifi-core/config/overrides/local.yaml
+                chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
+              fi
+              if [ -f /run/secrets/overrides/unifi-core/production.yaml ]; then
+                cp /run/secrets/overrides/unifi-core/production.yaml /data/unifi-core/config/overrides/production.yaml
+                chown "$USER:$GROUP" /data/unifi-core/config/overrides/production.yaml 2>/dev/null || true
+              fi
+              for _entry in \
+                "ulp-go|ulp-go|ulp-go|/data/ulp-go/ws/config.props" \
+                "unifi-credential-server|unifi-credential-server|unifi-credential-server|/data/unifi-credential-server/ws/config.props" \
+                "ucs-user-assets|ucs-user-assets|unifi-credential-server|/data/ucs-user-assets/ws/config.props" \
+                "unifi-directory|unifi-directory|unifi-directory|/data/unifi-directory/ws/config.props" \
+                "ucs-agent|ucs-agent|ucs-agent|/data/ucs-agent/ws/config.props" \
+                "unifi-identity-update|unifi-identity-update|unifi-identity-update|/data/unifi-identity-update/ws/config.props" \
+                "uid|uid|uid|/data/uid/ws/config.props"; do
+                _svc="${_entry%%|*}"; _r="${_entry#*|}"
+                _db_name="${_r%%|*}"; _r="${_r#*|}"
+                _db_user="${_r%%|*}"; _dst="${_r#*|}"
+                _role_user_src="/run/secrets/overrides/${_db_user}/db.username"
+                _role_pass_src="/run/secrets/overrides/${_db_user}/db.password"
+                _log_src="/run/secrets/overrides/${_svc}/logging.config.props"
+                if [ -f "${_role_user_src}" ] && [ -f "${_role_pass_src}" ]; then
+                  printf 'db.name = %s\ndb.host = %s\ndb.port = %s\ndb.encrypted = false\ndb.username = %s\ndb.password = %s\n' \
+                    "${_db_name}" "${PGHOST}" "${PGPORT:-5432}" "$(cat "${_role_user_src}")" "$(cat "${_role_pass_src}")" \
+                    > "${_dst}"
+                elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
+                  printf 'db.name = %s\ndb.host = %s\ndb.port = %s\ndb.encrypted = false\ndb.username = %s\ndb.password = %s\n' \
+                    "${_db_name}" "${PGHOST}" "${PGPORT:-5432}" "${_db_user}" "${PGPASSWORD}" \
+                    > "${_dst}"
+                fi
+                if [ -f "${_log_src}" ]; then
+                  [ -f "${_dst}" ] && printf '\n' >> "${_dst}" || true
+                  cat "${_log_src}" >> "${_dst}"
+                fi
+                [ -f "${_dst}" ] && chown "$USER:$GROUP" "${_dst}" 2>/dev/null || true
+              done
+              [ -n "${UOS_UUID}" ] && [ ! -f /data/uos_uuid ] && echo "${UOS_UUID}" > /data/uos_uuid || true
+              cp /usr/share/unifi-core/http/ssl-nist.conf /data/unifi-core/config/http/ssl-dynamic.conf || true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: srv
+              mountPath: /srv
+            - name: persistent
+              mountPath: /persistent
+            - name: override-config-secrets
+              mountPath: /run/secrets/overrides
+              readOnly: true
+            {{- if $tlsSecretName }}
+            - name: unifi-tls-secret
+              mountPath: /run/secrets/tls
+              readOnly: true
+            {{- end }}
+        {{- with .Values.unifi.extraInitContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      containers:
+        - name: unifi-os
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: Always
+          securityContext:
+            {{- toYaml $unifiSecurityContext | nindent 12 }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              # Set global Postgres env for systemd-managed services that rely on libpq defaults.
+              mkdir -p /etc/systemd/system.conf.d
+              cat >/etc/systemd/system.conf.d/10-postgres-env.conf <<EOF
+              [Manager]
+              DefaultEnvironment=PGHOST=${PGHOST} PGPORT=${PGPORT}
+              EOF
+              # Wrapper scripts and unit stubs are baked into the image.
+              mkdir -p /var/log/nginx
+              mkdir -p /var/lib/unifi
+              cat >/var/lib/unifi/env-overrides <<EOF
+              UNIFI_MQ_ENABLED=true
+              RABBITMQ_URI=${RABBITMQ_URI}
+              EOF
+              # MongoDB runs embedded via the bundled mongodb.service unit.
+              # No db_uri override needed — UniFi Network uses localhost by default.
+              # Run systemd as PID 1 so bundled UniFi services are managed
+              # by their native unit files inside the monolith container.
+              exec /sbin/init
+          env:
+            - name: UOS_SYSTEM_IP
+              value: {{ .Values.unifi.uosSystemIP | default "" | quote }}
+            - name: PGHOST
+              value: {{ include "unifi-os.postgresHost" . | quote }}
+            - name: PGPORT
+              value: {{ include "unifi-os.postgresPort" . | quote }}
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "unifi-os.rabbitmqSecretName" . }}
+                  key: {{ include "unifi-os.rabbitmqSecretPasswordKey" . }}
+            - name: RABBITMQ_URI
+              value: {{ include "unifi-os.rabbitmqURI" . | quote }}
+            {{- with .Values.unifi.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: inform
+              containerPort: 8080
+              protocol: TCP
+            - name: network-app
+              containerPort: 8443
+              protocol: TCP
+            - name: id-hub
+              containerPort: 9543
+              protocol: TCP
+            - name: site-supervisor
+              containerPort: 11084
+              protocol: TCP
+            - name: speedtest
+              containerPort: 6789
+              protocol: TCP
+            - name: hotspot-secure
+              containerPort: 8444
+              protocol: TCP
+            - name: rtp
+              containerPort: 5005
+              protocol: TCP
+            - name: redirect-0
+              containerPort: 8880
+              protocol: TCP
+            - name: redirect-1
+              containerPort: 8881
+              protocol: TCP
+            - name: redirect-2
+              containerPort: 8882
+              protocol: TCP
+            - name: stun
+              containerPort: 3478
+              protocol: UDP
+            - name: syslog
+              containerPort: 5514
+              protocol: UDP
+            - name: discovery
+              containerPort: 10003
+              protocol: UDP
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /
+              port: 443
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /
+              port: 443
+            initialDelaySeconds: 180
+            periodSeconds: 20
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: srv
+              mountPath: /srv
+            - name: unifi
+              mountPath: /var/lib/unifi
+            - name: mongodb
+              mountPath: /var/lib/mongodb
+            - name: log
+              mountPath: /var/log
+            - name: persistent
+              mountPath: /persistent
+            - name: run
+              mountPath: /run
+            - name: run-lock
+              mountPath: /run/lock
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+            {{- if .Values.postgres.enabled }}
+            - name: postgres-superuser-auth
+              mountPath: /run/secrets/postgres-superuser/pgpass
+              subPath: pgpass
+              readOnly: true
+            {{- end }}
+            {{- with .Values.unifi.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ .Values.unifi.resources.requests.cpu | quote }}
+              memory: {{ .Values.unifi.resources.requests.memory | quote }}
+            limits:
+              memory: {{ .Values.unifi.resources.limits.memory | quote }}
+              {{- if .Values.unifi.resources.limits.cpu }}
+              cpu: {{ .Values.unifi.resources.limits.cpu | quote }}
+              {{- end }}
+            {{- with .Values.unifi.resources.claims }}
+            claims:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        - name: journalctl
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              # Wait for systemd to create journal files in shared volumes.
+              # Without this, the sidecar can crash with "No journal files were found."
+              while ! compgen -G "/run/log/journal/*/*.journal" > /dev/null \
+                && ! compgen -G "/var/log/journal/*/*.journal" > /dev/null; do
+                sleep 2
+              done
+              journal_dirs=()
+              [ -d /run/log/journal ] && journal_dirs+=(--directory=/run/log/journal)
+              [ -d /var/log/journal ] && journal_dirs+=(--directory=/var/log/journal)
+              # Read all available journal files (including foreign machine-id dirs)
+              # and follow new entries for kubectl logs -c journalctl.
+              exec journalctl -f -o short-iso --no-pager --merge "${journal_dirs[@]}" | cut -c 27-
+          volumeMounts:
+            - name: run
+              mountPath: /run
+            - name: log
+              mountPath: /var/log
+          resources:
+            {{- toYaml .Values.unifi.journalctl.resources | nindent 12 }}
+        - name: discovery-shim
+          image: "node:24-alpine"
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - --watch
+            - /scripts/shim.js
+          volumeMounts:
+            - name: discovery-shim-script
+              mountPath: /scripts
+          resources:
+            {{- toYaml .Values.unifi.discoveryShim.resources | nindent 12 }}
+      volumes:
+        - name: run
+          emptyDir:
+            medium: Memory
+        - name: run-lock
+          emptyDir:
+            medium: Memory
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: override-config-secrets
+          projected:
+            sources:
+              - secret:
+                  name: postgres-unifi-core-override
+                  optional: true
+                  items:
+                    - key: local.yaml
+                      path: unifi-core/local.yaml
+              - configMap:
+                  name: config-overrides
+                  items:
+                    - key: production.yaml
+                      path: unifi-core/production.yaml
+                    - key: ulp-go.config.props
+                      path: ulp-go/logging.config.props
+                    - key: unifi-credential-server.config.props
+                      path: unifi-credential-server/logging.config.props
+                    - key: ucs-user-assets.config.props
+                      path: ucs-user-assets/logging.config.props
+                    - key: unifi-directory.config.props
+                      path: unifi-directory/logging.config.props
+                    - key: ucs-agent.config.props
+                      path: ucs-agent/logging.config.props
+                    - key: unifi-identity-update.config.props
+                      path: unifi-identity-update/logging.config.props
+                    - key: uid-agent.config.props
+                      path: uid/logging.config.props
+              # Per-role Postgres credentials (see templates/postgres-role-secrets.yaml
+              # for chart-managed mode; useExistingSecrets: true users must create these
+              # themselves — see DATABASE.md). unifi-core's own credential reaches the
+              # init container via PGUSER/PGPASSWORD env vars instead (see below).
+              - secret:
+                  name: pg-login-ulp-go
+                  optional: true
+                  items:
+                    - key: username
+                      path: ulp-go/db.username
+                    - key: password
+                      path: ulp-go/db.password
+              - secret:
+                  name: pg-login-uid
+                  optional: true
+                  items:
+                    - key: username
+                      path: uid/db.username
+                    - key: password
+                      path: uid/db.password
+              - secret:
+                  name: pg-login-unifi-credential-server
+                  optional: true
+                  items:
+                    - key: username
+                      path: unifi-credential-server/db.username
+                    - key: password
+                      path: unifi-credential-server/db.password
+              - secret:
+                  name: pg-login-unifi-directory
+                  optional: true
+                  items:
+                    - key: username
+                      path: unifi-directory/db.username
+                    - key: password
+                      path: unifi-directory/db.password
+              - secret:
+                  name: pg-login-ucs-agent
+                  optional: true
+                  items:
+                    - key: username
+                      path: ucs-agent/db.username
+                    - key: password
+                      path: ucs-agent/db.password
+              - secret:
+                  name: pg-login-unifi-identity-update
+                  optional: true
+                  items:
+                    - key: username
+                      path: unifi-identity-update/db.username
+                    - key: password
+                      path: unifi-identity-update/db.password
+        - name: discovery-shim-script
+          configMap:
+            name: discovery-shim-script
+            defaultMode: 0755
+        {{- if .Values.postgres.enabled }}
+        - name: postgres-superuser-auth
+          secret:
+            secretName: {{ printf "%s-superuser" (.Values.postgres.fullnameOverride | default "unifi-postgres") }}
+        {{- end }}
+        {{- if $tlsSecretName }}
+        - name: unifi-tls-secret
+          secret:
+            secretName: {{ $tlsSecretName }}
+        {{- end }}
+        {{- with .Values.unifi.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: persistent
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.unifi.storage.statefulset.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.unifi.storage.statefulset.sizes.persistent | quote }}
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.unifi.storage.statefulset.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.unifi.storage.statefulset.sizes.data | quote }}
+    - metadata:
+        name: srv
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.unifi.storage.statefulset.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.unifi.storage.statefulset.sizes.srv | quote }}
+    - metadata:
+        name: unifi
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.unifi.storage.statefulset.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.unifi.storage.statefulset.sizes.unifi | quote }}
+    - metadata:
+        name: log
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.unifi.storage.statefulset.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.unifi.storage.statefulset.sizes.log | quote }}
+    - metadata:
+        name: mongodb
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.unifi.storage.statefulset.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.unifi.storage.statefulset.sizes.mongodb | quote }}

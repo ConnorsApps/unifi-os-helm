@@ -17,7 +17,7 @@ metadata:
   name: unifi-tls
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "unifi-os.standardLabels" . | nindent 4 }}
+    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
 spec:
   secretName: {{ $cm.secretName | default "unifi-tls" }}
   issuerRef:

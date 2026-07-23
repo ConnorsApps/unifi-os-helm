@@ -36,19 +36,27 @@ make extract-systemd-map         # Dump systemd unit definitions into file-dumps
 helm dependency update charts/unifi-os
 ```
 
+### Local render / backwards-compat tests (gitignored output)
+```bash
+scripts/test-render-compat.sh <output-dir>   # helm template across the .render-test/values/*.yaml matrix
+```
+`.render-test/values/00-base.yaml` (fake secrets) is merged with each numbered scenario file (external/bundled postgres, both secret modes, both TLS modes, backup, exporter+ServiceMonitor, all 6 gateway routes, a kitchen-sink combo). The values files and the script are tracked in git; rendered output (`.render-test/golden/`, `.render-test/out/`) is gitignored. Use this matrix to check for regressions before/after template changes — diff the rendered YAML structurally (kind+name+spec), not byte-for-byte (cosmetic label/order differences are fine).
+
 ## Architecture
 
-### Chart templating: HULL
-The chart uses [HULL](https://github.com/vidispine/hull) as a meta-templating engine. Almost every Kubernetes object (StatefulSet, Services, ConfigMaps, Secrets, Routes) is defined as data in `charts/unifi-os/values.yaml` under `hull.objects`, not as separate template files. `charts/unifi-os/templates/hull.yaml` is a single line that delegates all rendering to HULL.
+### Chart templating: plain Helm templates
+The chart used to render via [HULL](https://github.com/vidispine/hull) (a meta-templating engine driven entirely by data in `values.yaml`); it was migrated off HULL to hand-written templates in `charts/unifi-os/templates/` — one file per resource or resource group (`statefulset.yaml`, `services.yaml`, `secrets.yaml`, `configmaps.yaml`, `routes.yaml`, `servicemonitor.yaml`, `deployment-unifi-exporter.yaml`, `cronjob-unifi-backup.yaml`, plus the pre-existing `backend-tls-policy.yaml`, `certmanager-certificate.yaml`, `postgres-role-secrets.yaml`). `values.yaml` now only holds domain configuration (image, storage, TLS, Gateway API routes, backup, exporter config, postgres/rabbitmq passthrough) plus the curated override values described below — there is no more generic `hull.objects` escape hatch.
 
-Values needing Helm template logic use the `_HT!` prefix for inline Go templates within the YAML data.
+**Critical compatibility constraint:** every object's `metadata.name` (StatefulSet `monolith`, Services `unifi`/`hotspot`/`udp`/`unifi-exporter`, Secrets, ConfigMaps, Routes, etc.) is a **hardcoded literal string in the template, not derived from a fullname/release-prefix helper**. This matches HULL's old `noObjectNamePrefixes: true` behavior and must stay this way — renaming any of these would orphan the StatefulSet's `volumeClaimTemplates`-backed PVCs and break Service selectors on upgrade. Don't "fix" this into a `{{ include "unifi-os.fullname" . }}` pattern.
+
+### Override surface
+Beyond the domain values, `unifi.*` (StatefulSet), `unifiExporter.*` (exporter Deployment), and `backup.*` (CronJob) each expose the same curated set of standard Kubernetes overrides so users don't need to fork the chart: scheduling (`nodeSelector`, `affinity`, `tolerations`, `priorityClassName`, `topologySpreadConstraints`, `runtimeClassName`), pod plumbing (`podAnnotations`, `hostAliases`, `dnsPolicy`/`dnsConfig`, `terminationGracePeriodSeconds`), security (`podSecurityContext`/`securityContext`, merged on top of whatever a workload requires by default — e.g. the `unifi-os` container's `privileged: true, runAsUser: 0` for running systemd as PID 1), and DRA (`resourceClaims` at pod level, `resources.claims` at container level). The StatefulSet additionally has `extraEnv`/`extraVolumes`/`extraVolumeMounts`/`extraInitContainers`/`serviceAccountName` and per-sidecar `journalctl.resources`/`discoveryShim.resources`. Every rendered Service (`unifi.service`, `unifi.hotspotService`, `unifi.udpService`, `unifiExporter.service`) accepts `type`/`annotations`, and `udpService` additionally accepts `externalTrafficPolicy`. Chart-wide: `commonLabels`, `commonAnnotations`, `imagePullSecrets`. See `values.env.example.yaml` for commented examples of each.
 
 ### Template helpers (`charts/unifi-os/templates/_helpers.tpl`)
-Provides functions for resolving database connections:
+- `unifi-os.labels` / `unifi-os.selectorLabels` — standard chart labels (merged with `commonLabels`) and selector labels (take a `component` param), replacing HULL's automatic label injection
 - `unifi-os.postgresHost` — resolves hostname from explicit `connection.host` or derives from CloudNativePG cluster name
 - `unifi-os.rabbitmqURI` — builds RabbitMQ connection URI with password injection from secrets
 - Connection merging: `global.<service>.connection` overrides chart-local `<service>.connection` (for umbrella chart usage)
-
 
 ### Dockerfile
 Multi-stage build that:
@@ -60,7 +68,7 @@ Multi-stage build that:
 
 ### Services
 The container runs upstream systemd managing ~15 services intact. See `SERVICES.md` for the full reference. Key patched behaviors:
-- `uos-discovery-client` replaced with a Node.js HTTP shim (defined in `values.yaml` ConfigMap `discovery-shim-script`)
+- `uos-discovery-client` replaced with a Node.js HTTP shim (script baked into the `discovery-shim-script` ConfigMap in `templates/configmaps.yaml`)
 - `uos-agent` stubbed out (disabled with `Restart=no`)
 - PostgreSQL externalized; embedded instance replaced with client wrappers
 
@@ -82,8 +90,10 @@ Both are disabled by default; enable in values:
 |------|---------|
 | `Dockerfile` | Image extraction and patching |
 | `Makefile` | Build, push, extraction targets |
-| `charts/unifi-os/values.yaml` | All K8s object definitions (HULL) + service config |
-| `charts/unifi-os/templates/_helpers.tpl` | Connection resolution helpers |
-| `values.env.example.yaml` | Template for environment-specific overrides |
+| `charts/unifi-os/values.yaml` | Domain config (image, storage, TLS, Gateway routes, backup, exporter, postgres/rabbitmq passthrough) + curated override defaults |
+| `charts/unifi-os/templates/` | Plain Helm templates, one file per resource/resource group |
+| `charts/unifi-os/templates/_helpers.tpl` | Label + connection/secret/TLS resolution helpers |
+| `values.env.example.yaml` | Template for environment-specific overrides, incl. curated override examples |
 | `SERVICES.md` | Reference for all ~15 UniFi OS systemd services |
+| `.render-test/values/`, `scripts/test-render-compat.sh` | Local backwards-compat render matrix (tracked; rendered output gitignored) |
 | `file-dumps/` | Extracted container configs and systemd maps (for reverse-engineering) |

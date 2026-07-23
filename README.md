@@ -45,13 +45,6 @@ Helm release
   └─ RabbitMQ            (CloudPirates subchart or external)
 ```
 
-## Why HULL
-
-This chart is built on [HULL](https://github.com/vidispine/hull), which means
-almost every Kubernetes object (services, routes, secrets, env vars, resource limits,
-etc.) is defined as data in `charts/unifi-os/values.yaml` under `hull.objects`. You can override
-or extend any object in your own values file without forking the chart. Values
-that need Helm template logic use the `_HT!` prefix for inline [Go Helm templates](https://helm.sh/docs/chart_template_guide/).
 
 ## Repository contents
 
@@ -65,7 +58,7 @@ that need Helm template logic use the `_HT!` prefix for inline [Go Helm template
 | [SERVICES.md](SERVICES.md) | Reference for every UniFi OS service, its role, and dependencies. |
 | [DATABASE.md](DATABASE.md) | PostgreSQL setup — bundled CNPG and external, credential options. |
 | [TLS.md](TLS.md) | TLS certificate options — self-signed, existing secret, cert-manager. |
-| `charts/unifi-os/templates/` | HULL entrypoint, helpers, and Postgres override secrets. |
+| `charts/unifi-os/templates/` | Plain Helm templates for every rendered object, plus shared naming/labeling helpers. |
 | `scripts/` | Extraction utilities for reverse-engineering the upstream image. |
 
 ## Prerequisites

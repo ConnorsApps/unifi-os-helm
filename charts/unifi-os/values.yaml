@@ -1,5 +1,3 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/vidispine/hull/refs/heads/main/hull/values.schema.json
-
 # ------------------------------------------------------------------
 # Dependencies — PostgreSQL, RabbitMQ
 #
@@ -56,1034 +54,17 @@ image:
   repository: "ghcr.io/connorsapps/unifi-os"
   tag: "5.1.21"
 
-hull:
-  config:
-    general:
-      # Keep object keys as-is (no automatic release-name prefixing).
-      noObjectNamePrefixes: true
-      # Keep explicit fullname override empty when noObjectNamePrefixes is enabled.
-      fullnameOverride: ""
-    templates:
-      pod:
-        global:
-          # Prevent HULL from trying to create/manage a ServiceAccount named "default"
-          # when object name prefixes are disabled.
-          serviceAccountName: default
-  objects:
-    # ------------------------------------------------------------------
-    # ConfigMaps
-    # ------------------------------------------------------------------
-    configmap:
-      config-overrides:
-        data:
-          production.yaml:
-            inline: |-
-              logs:
-                enableConsole: true
-          # Go service logging overrides for container stdout/stderr.
-          # Service DB settings come from /data/*/ws/config.props DB secrets.
-          ulp-go.config.props:
-            inline: |-
-              log.std = true
-              log.redirect_std_output = false
-              log.std_to_file.enable = false
-          ucs-agent.config.props:
-            inline: |-
-              log.std = true
-              log.redirect_std_output = false
-              log.std_to_file.enable = false
-          unifi-directory.config.props:
-            inline: |-
-              log.std = true
-              log.redirect_std_output = false
-              log.std_to_file.enable = false
-          unifi-identity-update.config.props:
-            inline: |-
-              log.std = true
-              log.file = false
-              log.redirect_std_output = false
-          uid-agent.config.props:
-            inline: |-
-              log.std = true
-              log.redirect_std_output = false
-              log.std_to_file.enable = false
-          unifi-credential-server.config.props:
-            inline: |-
-              log.std = true
-              log.redirect_std_output = false
-              log.std_to_file.enable = false
-              identity.device.auth = false
-              identity.cloud.env = dev
-              identity.support_cloud_token =
-              cloud.env = dev
-          ucs-user-assets.config.props:
-            inline: |-
-              identity.cloud.env = dev
-              identity.support_cloud_token =
-              identity.device.auth = false
-              cloud.env = dev
-      # ------------------------------------------------------------------
-      # Discovery shim sidecar script
-      #
-      # uos-discovery-client ships as a stub binary that exits immediately,
-      # so nothing ever listens on port 11002 (discoveryClientUrl). unifi-core
-      # polls that port on a tight setIntervalAsync loop and logs two recurring
-      # warnings every few seconds:
-      #   [system] Failed to fetch network interfaces from discovery agent
-      #   [discovery.client] Error on client scan: ECONNREFUSED 127.0.0.1:11002
-      #
-      # This shim is a minimal Node.js HTTP server that satisfies those calls:
-      #   GET /scan         → [] (no devices — no UDP broadcast in a k8s pod)
-      #   GET <anything>    → os.networkInterfaces() in the shape $Je() expects,
-      #                       giving unifi-core a chance to resolve its lanIp
-      #   HEAD /healthz     → 200 OK
-      # ------------------------------------------------------------------
-      discovery-shim-script:
-        data:
-          shim.js:
-            inline: |-
-              const http = require("http");
-              const os = require("os");
+# ------------------------------------------------------------------
+# Chart-wide extensibility — applied across every object this chart renders
+# (not the postgres/rabbitmq subcharts, which have their own values).
+# ------------------------------------------------------------------
+# Extra labels/annotations merged onto every object.
+commonLabels: {}
+commonAnnotations: {}
 
-              const PORT = Number(process.env.DISCOVERY_SHIM_PORT || 11002);
-              const HOST = process.env.DISCOVERY_SHIM_HOST || "0.0.0.0";
-
-              function writeJson(res, statusCode, body) {
-                res.statusCode = statusCode;
-                res.setHeader("Content-Type", "application/json");
-                res.end(JSON.stringify(body));
-              }
-
-              const server = http.createServer((req, res) => {
-                const method = req.method || "GET";
-                const url = req.url || "/";
-
-                if (method === "HEAD" && (url === "/" || url === "/healthz")) {
-                  res.statusCode = 200;
-                  return res.end();
-                }
-
-                if (url.startsWith("/scan")) {
-                  // discovery.client scan — no UDP broadcast domain in a k8s pod
-                  return writeJson(res, 200, []);
-                }
-
-                if (method === "GET") {
-                  // unifi-core validates this response with ZodRecord, which expects a
-                  // plain object keyed by interface name — exactly what os.networkInterfaces()
-                  // returns: { "eth0": [{address, netmask, ...}], "lo": [...] }
-                  return writeJson(res, 200, os.networkInterfaces());
-                }
-
-                return writeJson(res, 404, {});
-              });
-
-              server.listen(PORT, HOST, () => {
-                console.log(`discovery-shim listening on ${HOST}:${PORT}`);
-              });
-      # ------------------------------------------------------------------
-      # Backup — non-sensitive config rendered from backup.config values.
-      # password and storageUrl are kept in the unifi-backup-secret Secret.
-      # ------------------------------------------------------------------
-      unifi-backup-config:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.enabled }}
-        data:
-          config.yaml:
-            inline: |
-              {{- $cfg := deepCopy .Values.backup.config -}}
-              {{- $url := .Values.backup.config.unifi.url | default (printf "https://unifi.%s.svc.cluster.local" .Release.Namespace) -}}
-              {{- $_ := set $cfg.unifi "url" $url -}}
-              {{ $cfg | toYaml -}}
-    # ------------------------------------------------------------------
-    # Services
-    # ------------------------------------------------------------------
-    service:
-      # Primary ClusterIP — HTTP/HTTPS application ports consumed by ingress.
-      unifi:
-        enabled: true
-        type: ClusterIP
-        selector:
-          app.kubernetes.io/component: monolith
-        ports:
-          # Default UniFi OS HTTPS site served by unifi-core/nginx.
-          # This listener serves /, /manage, /proxy/network, etc.
-          https:
-            port: 443
-            protocol: TCP
-            name: https
-          # Device and application communication (inform URL)
-          inform:
-            port: 8080
-            protocol: TCP
-            name: inform
-          # UniFi Network Application GUI/API
-          network-app:
-            port: 8443
-            protocol: TCP
-            name: network-app
-          # UniFi Identity Hub
-          id-hub:
-            port: 9543
-            protocol: TCP
-            name: id-hub
-          # Site Supervisor
-          site-supervisor:
-            port: 11084
-            protocol: TCP
-            name: site-supervisor
-          # UniFi mobile speed test
-          speedtest:
-            port: 6789
-            protocol: TCP
-            name: speedtest
-          # Secure Hotspot portal
-          hotspot-secure:
-            port: 8444
-            protocol: TCP
-            name: hotspot-secure
-          # RTP control
-          rtp:
-            port: 5005
-            protocol: TCP
-            name: rtp
-      # Hotspot portal redirect ports — separate service so they can be
-      # mapped through the ingress TCP config independently.
-      hotspot:
-        enabled: true
-        type: ClusterIP
-        selector:
-          app.kubernetes.io/component: monolith
-        ports:
-          redirect-0:
-            port: 8880
-            protocol: TCP
-            name: redirect-0
-          redirect-1:
-            port: 8881
-            protocol: TCP
-            name: redirect-1
-          redirect-2:
-            port: 8882
-            protocol: TCP
-            name: redirect-2
-      # UDP ports — expose these through your cluster edge (Gateway API,
-      # ingress controller TCP/UDP mappings, LoadBalancer, or NodePort).
-      udp:
-        enabled: true
-        type: ClusterIP
-        selector:
-          app.kubernetes.io/component: monolith
-        ports:
-          # STUN — required for device adoption and Remote Management
-          stun:
-            port: 3478
-            protocol: UDP
-            name: stun
-          # Remote syslog capture
-          syslog:
-            port: 5514
-            protocol: UDP
-            name: syslog
-          # Device discovery during adoption
-          discovery:
-            port: 10003
-            protocol: UDP
-            name: discovery
-      # Metrics endpoint for the optional UniFi exporter.
-      unifi-exporter:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.enabled }}
-        type: ClusterIP
-        selector:
-          app.kubernetes.io/component: unifi-exporter
-        ports:
-          metrics:
-            port: 9130
-            targetPort: metrics
-            name: metrics
-            protocol: TCP
-    # ------------------------------------------------------------------
-    # Gateway API / Istio routing objects
-    # ------------------------------------------------------------------
-    httproute:
-      unifi-inform:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.enabled }}
-        hostnames: _HT!{{ list (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.hostname }}
-        parentRefs:
-          private:
-            kind: Gateway
-            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
-            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
-            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.sectionName }}
-        rules:
-          default:
-            backendRefs:
-              unifi:
-                name: unifi
-                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRouteInform.backendPort }}
-            matches:
-              inform:
-                path:
-                  type: PathPrefix
-                  value: /inform
-      unifi-https:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.enabled }}
-        hostnames: _HT!{{ list (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.hostname }}
-        parentRefs:
-          private:
-            kind: Gateway
-            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
-            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
-            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.sectionName }}
-        rules:
-          default:
-            backendRefs:
-              unifi:
-                name: unifi
-                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.httpRoute.backendPort }}
-    tcproute:
-      unifi-http-8080:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.tcpRoute.enabled }}
-        parentRefs:
-          private:
-            kind: Gateway
-            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
-            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
-            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.tcpRoute.sectionName }}
-        rules:
-          default:
-            backendRefs:
-              unifi:
-                name: unifi
-                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.tcpRoute.backendPort }}
-    udproute:
-      unifi-ap-discovery:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.discovery.enabled }}
-        parentRefs:
-          private:
-            kind: Gateway
-            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
-            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
-            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.discovery.sectionName }}
-        rules:
-          default:
-            backendRefs:
-              udp:
-                name: udp
-                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.discovery.backendPort }}
-      unifi-stun:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.stun.enabled }}
-        parentRefs:
-          private:
-            kind: Gateway
-            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
-            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
-            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.stun.sectionName }}
-        rules:
-          default:
-            backendRefs:
-              udp:
-                name: udp
-                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.stun.backendPort }}
-      unifi-remote-syslog:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.syslog.enabled }}
-        parentRefs:
-          private:
-            kind: Gateway
-            name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.name }}
-            namespace: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.parentRef.namespace }}
-            sectionName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.syslog.sectionName }}
-        rules:
-          default:
-            backendRefs:
-              udp:
-                name: udp
-                port: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.gateway.udpRoutes.syslog.backendPort }}
-    # ------------------------------------------------------------------
-    # ServiceMonitor — opt-in Prometheus scrape config for UniFi exporter.
-    # Requires the Prometheus Operator CRDs to be installed.
-    # ------------------------------------------------------------------
-    servicemonitor:
-      unifi-exporter:
-        enabled: _HT!{{ and ((index . "PARENT_CONTEXT").Values.unifiExporter.enabled) ((index . "PARENT_CONTEXT").Values.unifiExporter.serviceMonitor.enabled) }}
-        selector:
-          matchLabels:
-            app.kubernetes.io/component: unifi-exporter
-        endpoints:
-          - port: metrics
-            path: /metrics
-            interval: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.serviceMonitor.interval | quote }}
-            scrapeTimeout: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.serviceMonitor.scrapeTimeout | quote }}
-    # ------------------------------------------------------------------
-    # Secrets
-    # ------------------------------------------------------------------
-    secret:
-      rabbitmq-auth:
-        enabled: _HT!{{ not (include "unifi-os.rabbitmqUseExistingSecret" (index . "PARENT_CONTEXT") | trim) }}
-        staticName: true
-        metadataNameOverride: rabbitmq-auth
-        type: Opaque
-        stringData:
-          password: _HT!{{ include "unifi-os.rabbitmqPassword" (index . "PARENT_CONTEXT") }}
-          erlang-cookie: _HT!{{ include "unifi-os.rabbitmqErlangCookie" (index . "PARENT_CONTEXT") }}
-      unifi-pg-auth:
-        enabled: _HT!{{ not (include "unifi-os.postgresUseExistingSecret" (index . "PARENT_CONTEXT") | trim) }}
-        staticName: true
-        type: kubernetes.io/basic-auth
-        stringData:
-          username: unifi-core
-          password: _HT!{{ include "unifi-os.postgresPassword" (index . "PARENT_CONTEXT") }}
-      # Backup credentials — created only when backup.existingSecret.name is not set.
-      unifi-backup-secret:
-        enabled: _HT!{{ and ((index . "PARENT_CONTEXT").Values.backup.enabled) (not ((index . "PARENT_CONTEXT").Values.backup.existingSecret.name)) }}
-        type: Opaque
-        stringData:
-          password: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.password }}
-          storageUrl: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.storageUrl }}
-      # Exporter credentials — created only when unifiExporter.existingSecret.name is not set.
-      unifi-exporter-secret:
-        enabled: _HT!{{ and ((index . "PARENT_CONTEXT").Values.unifiExporter.enabled) (not ((index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name)) }}
-        type: Opaque
-        stringData:
-          password: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.password }}
-          api-key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.apiKey }}
-    # ------------------------------------------------------------------
-    # StatefulSet — single-container systemd runtime (Postgres/RMQ external; Mongo embedded).
-    # ------------------------------------------------------------------
-    statefulset:
-      monolith:
-        enabled: true
-        replicas: 1
-        volumeClaimTemplates:
-          - metadata:
-              name: persistent
-            spec:
-              accessModes: [ReadWriteOnce]
-              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
-              resources:
-                requests:
-                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.persistent | quote }}
-          - metadata:
-              name: data
-            spec:
-              accessModes: [ReadWriteOnce]
-              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
-              resources:
-                requests:
-                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.data | quote }}
-          - metadata:
-              name: srv
-            spec:
-              accessModes: [ReadWriteOnce]
-              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
-              resources:
-                requests:
-                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.srv | quote }}
-          - metadata:
-              name: unifi
-            spec:
-              accessModes: [ReadWriteOnce]
-              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
-              resources:
-                requests:
-                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.unifi | quote }}
-          - metadata:
-              name: log
-            spec:
-              accessModes: [ReadWriteOnce]
-              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
-              resources:
-                requests:
-                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.log | quote }}
-          - metadata:
-              name: mongodb
-            spec:
-              accessModes: [ReadWriteOnce]
-              storageClassName: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.storageClassName | quote }}
-              resources:
-                requests:
-                  storage: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.storage.statefulset.sizes.mongodb | quote }}
-        pod:
-          securityContext: {}
-          volumes:
-            run:
-              emptyDir:
-                medium: Memory
-            run-lock:
-              emptyDir:
-                medium: Memory
-            cgroup:
-              hostPath:
-                path: /sys/fs/cgroup
-                type: Directory
-            override-config-secrets:
-              projected:
-                sources:
-                  - secret:
-                      name: postgres-unifi-core-override
-                      optional: true
-                      items:
-                        - key: local.yaml
-                          path: unifi-core/local.yaml
-                  - configMap:
-                      name: config-overrides
-                      items:
-                        - key: production.yaml
-                          path: unifi-core/production.yaml
-                        - key: ulp-go.config.props
-                          path: ulp-go/logging.config.props
-                        - key: unifi-credential-server.config.props
-                          path: unifi-credential-server/logging.config.props
-                        - key: ucs-user-assets.config.props
-                          path: ucs-user-assets/logging.config.props
-                        - key: unifi-directory.config.props
-                          path: unifi-directory/logging.config.props
-                        - key: ucs-agent.config.props
-                          path: ucs-agent/logging.config.props
-                        - key: unifi-identity-update.config.props
-                          path: unifi-identity-update/logging.config.props
-                        - key: uid-agent.config.props
-                          path: uid/logging.config.props
-                  # Per-role Postgres credentials (see templates/postgres-role-secrets.yaml
-                  # for chart-managed mode; useExistingSecrets: true users must create these
-                  # themselves — see DATABASE.md). unifi-core's own credential reaches the
-                  # init container via PGUSER/PGPASSWORD env vars instead (see below).
-                  - secret:
-                      name: pg-login-ulp-go
-                      optional: true
-                      items:
-                        - key: username
-                          path: ulp-go/db.username
-                        - key: password
-                          path: ulp-go/db.password
-                  - secret:
-                      name: pg-login-uid
-                      optional: true
-                      items:
-                        - key: username
-                          path: uid/db.username
-                        - key: password
-                          path: uid/db.password
-                  - secret:
-                      name: pg-login-unifi-credential-server
-                      optional: true
-                      items:
-                        - key: username
-                          path: unifi-credential-server/db.username
-                        - key: password
-                          path: unifi-credential-server/db.password
-                  - secret:
-                      name: pg-login-unifi-directory
-                      optional: true
-                      items:
-                        - key: username
-                          path: unifi-directory/db.username
-                        - key: password
-                          path: unifi-directory/db.password
-                  - secret:
-                      name: pg-login-ucs-agent
-                      optional: true
-                      items:
-                        - key: username
-                          path: ucs-agent/db.username
-                        - key: password
-                          path: ucs-agent/db.password
-                  - secret:
-                      name: pg-login-unifi-identity-update
-                      optional: true
-                      items:
-                        - key: username
-                          path: unifi-identity-update/db.username
-                        - key: password
-                          path: unifi-identity-update/db.password
-            discovery-shim-script:
-              configMap:
-                name: discovery-shim-script
-                defaultMode: 0755
-            postgres-superuser-auth:
-              enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.postgres.enabled }}
-              secret:
-                secretName: _HT!{{ printf "%s-superuser" ((index . "PARENT_CONTEXT").Values.postgres.fullnameOverride | default "unifi-postgres") }}
-            unifi-tls-secret:
-              enabled: _HT!{{ ne (include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT")) "" }}
-              secret:
-                secretName: _HT!{{ include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT") }}
-          initContainers:
-            wait-postgres:
-              enabled: true
-              image:
-                repository: busybox
-              env:
-                PGHOST:
-                  value: _HT!{{ include "unifi-os.postgresHost" (index . "PARENT_CONTEXT") }}
-                PGPORT:
-                  value: "5432"
-              command:
-                - sh
-                - -c
-                - until nc -z -w 2 "$PGHOST" "${PGPORT:-5432}"; do sleep 2; done
-            init:
-              image:
-                repository: _HT!{{ (index . "PARENT_CONTEXT").Values.image.repository | quote }}
-                tag: _HT!{{ (index . "PARENT_CONTEXT").Values.image.tag | quote }}
-              env:
-                UOS_UUID:
-                  value: "3403e723-3f5b-5a1e-9b88-ed7e2fcfd762"
-                PGHOST:
-                  value: _HT!{{ include "unifi-os.postgresHost" (index . "PARENT_CONTEXT") }}
-                PGPORT:
-                  value: _HT!{{ include "unifi-os.postgresPort" (index . "PARENT_CONTEXT") | quote }}
-                PGDATABASE:
-                  value: _HT!{{ include "unifi-os.postgresDatabase" (index . "PARENT_CONTEXT") }}
-                PGUSER:
-                  value: _HT!{{ include "unifi-os.postgresUser" (index . "PARENT_CONTEXT") }}
-                PGPASSWORD:
-                  valueFrom:
-                    secretKeyRef:
-                      name: _HT!{{ include "unifi-os.postgresSecretName" (index . "PARENT_CONTEXT") }}
-                      key: _HT!{{ include "unifi-os.postgresSecretPasswordKey" (index . "PARENT_CONTEXT") }}
-              command:
-                - /bin/bash
-                - -c
-                - |
-                  set -e
-                  export USER=unifi-core GROUP=unifi-core
-                  /usr/share/unifi-core/app/hooks/pre-start 2>/dev/null || true
-                  mkdir -p \
-                    /data/unifi-core/config/http \
-                    /data/unifi-core/config/overrides \
-                    /data/unifi-core/logs \
-                    /data/ulp-go/ws \
-                    /data/unifi-credential-server/ws \
-                    /data/unifi-directory/ws \
-                    /data/ucs-agent/ws \
-                    /data/uid/ws \
-                    /data/unifi-identity-update/ws \
-                    /data/ucs-user-assets/ws \
-                    /srv/unifi-core \
-                    /persistent
-                  _tls_dir=/data/unifi-core/config
-                  _tls_crt="${_tls_dir}/unifi-core.crt"
-                  _tls_key="${_tls_dir}/unifi-core.key"
-                  _tls_ca="${_tls_dir}/unifi-core-ca.crt"
-                  if [ -f /run/secrets/tls/tls.crt ] && [ -f /run/secrets/tls/tls.key ]; then
-                    cp /run/secrets/tls/tls.crt "${_tls_crt}"
-                    cp /run/secrets/tls/tls.key "${_tls_key}"
-                    [ -f /run/secrets/tls/ca.crt ] && cp /run/secrets/tls/ca.crt "${_tls_ca}" || cp "${_tls_crt}" "${_tls_ca}"
-                    chown "$USER:$GROUP" "${_tls_crt}" "${_tls_key}" "${_tls_ca}" 2>/dev/null || true
-                    chmod 600 "${_tls_key}" 2>/dev/null || true
-                  fi
-                  if [ ! -s "${_tls_crt}" ] || [ ! -s "${_tls_key}" ]; then
-                    rm -f "${_tls_crt}" "${_tls_key}"
-                    openssl req -x509 -newkey rsa:2048 -nodes \
-                      -keyout "${_tls_key}" \
-                      -out "${_tls_crt}" \
-                      -days 3650 \
-                      -subj "/CN=unifi.local" >/dev/null 2>&1 || true
-                    [ -s "${_tls_crt}" ] && [ ! -s "${_tls_ca}" ] && cp "${_tls_crt}" "${_tls_ca}" || true
-                    chown "$USER:$GROUP" "${_tls_crt}" "${_tls_key}" "${_tls_ca}" 2>/dev/null || true
-                    chmod 600 "${_tls_key}" 2>/dev/null || true
-                  fi
-                  # Copy overrides from read-only projected secrets into writable /data.
-                  # Service pre-start scripts chown these files, so they cannot stay read-only mounts.
-                  # When existingSecret is configured, the projected secrets are absent; configs are
-                  # generated from PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD env vars instead.
-                  if [ -f /run/secrets/overrides/unifi-core/local.yaml ]; then
-                    cp /run/secrets/overrides/unifi-core/local.yaml /data/unifi-core/config/overrides/local.yaml
-                    chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
-                  elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
-                    printf 'postgres:\n  host: %s\n  port: %s\n  database: %s\n  user: %s\n  password: "%s"\n' \
-                      "${PGHOST}" "${PGPORT:-5432}" "${PGDATABASE:-unifi-core}" "${PGUSER:-unifi-core}" "${PGPASSWORD}" \
-                      > /data/unifi-core/config/overrides/local.yaml
-                    chown "$USER:$GROUP" /data/unifi-core/config/overrides/local.yaml 2>/dev/null || true
-                  fi
-                  if [ -f /run/secrets/overrides/unifi-core/production.yaml ]; then
-                    cp /run/secrets/overrides/unifi-core/production.yaml /data/unifi-core/config/overrides/production.yaml
-                    chown "$USER:$GROUP" /data/unifi-core/config/overrides/production.yaml 2>/dev/null || true
-                  fi
-                  for _entry in \
-                    "ulp-go|ulp-go|ulp-go|/data/ulp-go/ws/config.props" \
-                    "unifi-credential-server|unifi-credential-server|unifi-credential-server|/data/unifi-credential-server/ws/config.props" \
-                    "ucs-user-assets|ucs-user-assets|unifi-credential-server|/data/ucs-user-assets/ws/config.props" \
-                    "unifi-directory|unifi-directory|unifi-directory|/data/unifi-directory/ws/config.props" \
-                    "ucs-agent|ucs-agent|ucs-agent|/data/ucs-agent/ws/config.props" \
-                    "unifi-identity-update|unifi-identity-update|unifi-identity-update|/data/unifi-identity-update/ws/config.props" \
-                    "uid|uid|uid|/data/uid/ws/config.props"; do
-                    _svc="${_entry%%|*}"; _r="${_entry#*|}"
-                    _db_name="${_r%%|*}"; _r="${_r#*|}"
-                    _db_user="${_r%%|*}"; _dst="${_r#*|}"
-                    _role_user_src="/run/secrets/overrides/${_db_user}/db.username"
-                    _role_pass_src="/run/secrets/overrides/${_db_user}/db.password"
-                    _log_src="/run/secrets/overrides/${_svc}/logging.config.props"
-                    if [ -f "${_role_user_src}" ] && [ -f "${_role_pass_src}" ]; then
-                      printf 'db.name = %s\ndb.host = %s\ndb.port = %s\ndb.encrypted = false\ndb.username = %s\ndb.password = %s\n' \
-                        "${_db_name}" "${PGHOST}" "${PGPORT:-5432}" "$(cat "${_role_user_src}")" "$(cat "${_role_pass_src}")" \
-                        > "${_dst}"
-                    elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
-                      printf 'db.name = %s\ndb.host = %s\ndb.port = %s\ndb.encrypted = false\ndb.username = %s\ndb.password = %s\n' \
-                        "${_db_name}" "${PGHOST}" "${PGPORT:-5432}" "${_db_user}" "${PGPASSWORD}" \
-                        > "${_dst}"
-                    fi
-                    if [ -f "${_log_src}" ]; then
-                      [ -f "${_dst}" ] && printf '\n' >> "${_dst}" || true
-                      cat "${_log_src}" >> "${_dst}"
-                    fi
-                    [ -f "${_dst}" ] && chown "$USER:$GROUP" "${_dst}" 2>/dev/null || true
-                  done
-                  [ -n "${UOS_UUID}" ] && [ ! -f /data/uos_uuid ] && echo "${UOS_UUID}" > /data/uos_uuid || true
-                  cp /usr/share/unifi-core/http/ssl-nist.conf /data/unifi-core/config/http/ssl-dynamic.conf || true
-              volumeMounts:
-                data:
-                  name: data
-                  mountPath: /data
-                srv:
-                  name: srv
-                  mountPath: /srv
-                persistent:
-                  name: persistent
-                  mountPath: /persistent
-                override-config-secrets:
-                  name: override-config-secrets
-                  mountPath: /run/secrets/overrides
-                  readOnly: true
-                unifi-tls-secret:
-                  enabled: _HT!{{ ne (include "unifi-os.unifiTLSSecretName" (index . "PARENT_CONTEXT")) "" }}
-                  name: unifi-tls-secret
-                  mountPath: /run/secrets/tls
-                  readOnly: true
-          containers:
-            unifi-os:
-              image:
-                repository: _HT!{{ (index . "PARENT_CONTEXT").Values.image.repository | quote }}
-                tag: _HT!{{ (index . "PARENT_CONTEXT").Values.image.tag | quote }}
-              imagePullPolicy: Always
-              securityContext:
-                privileged: true
-                runAsUser: 0
-              command:
-                - /bin/bash
-                - -c
-                - |
-                  set -e
-                  # Set global Postgres env for systemd-managed services that rely on libpq defaults.
-                  mkdir -p /etc/systemd/system.conf.d
-                  cat >/etc/systemd/system.conf.d/10-postgres-env.conf <<EOF
-                  [Manager]
-                  DefaultEnvironment=PGHOST=${PGHOST} PGPORT=${PGPORT}
-                  EOF
-                  # Wrapper scripts and unit stubs are baked into the image.
-                  mkdir -p /var/log/nginx
-                  mkdir -p /var/lib/unifi
-                  cat >/var/lib/unifi/env-overrides <<EOF
-                  UNIFI_MQ_ENABLED=true
-                  RABBITMQ_URI=${RABBITMQ_URI}
-                  EOF
-                  # MongoDB runs embedded via the bundled mongodb.service unit.
-                  # No db_uri override needed — UniFi Network uses localhost by default.
-                  # Run systemd as PID 1 so bundled UniFi services are managed
-                  # by their native unit files inside the monolith container.
-                  exec /sbin/init
-              env:
-                UOS_SYSTEM_IP:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.uosSystemIP | default "" }}
-                PGHOST:
-                  value: _HT!{{ include "unifi-os.postgresHost" (index . "PARENT_CONTEXT") }}
-                PGPORT:
-                  value: _HT!{{ include "unifi-os.postgresPort" (index . "PARENT_CONTEXT") }}
-                RABBITMQ_PASSWORD:
-                  valueFrom:
-                    secretKeyRef:
-                      name: _HT!{{ include "unifi-os.rabbitmqSecretName" (index . "PARENT_CONTEXT") }}
-                      key: _HT!{{ include "unifi-os.rabbitmqSecretPasswordKey" (index . "PARENT_CONTEXT") }}
-                RABBITMQ_URI:
-                  value: _HT!{{ include "unifi-os.rabbitmqURI" (index . "PARENT_CONTEXT") }}
-              ports:
-                inform:
-                  containerPort: 8080
-                  protocol: TCP
-                network-app:
-                  containerPort: 8443
-                  protocol: TCP
-                id-hub:
-                  containerPort: 9543
-                  protocol: TCP
-                site-supervisor:
-                  containerPort: 11084
-                  protocol: TCP
-                speedtest:
-                  containerPort: 6789
-                  protocol: TCP
-                hotspot-secure:
-                  containerPort: 8444
-                  protocol: TCP
-                rtp:
-                  containerPort: 5005
-                  protocol: TCP
-                redirect-0:
-                  containerPort: 8880
-                  protocol: TCP
-                redirect-1:
-                  containerPort: 8881
-                  protocol: TCP
-                redirect-2:
-                  containerPort: 8882
-                  protocol: TCP
-                stun:
-                  containerPort: 3478
-                  protocol: UDP
-                syslog:
-                  containerPort: 5514
-                  protocol: UDP
-                discovery:
-                  containerPort: 10003
-                  protocol: UDP
-              readinessProbe:
-                httpGet:
-                  scheme: HTTPS
-                  path: /
-                  port: 443
-                initialDelaySeconds: 90
-                periodSeconds: 15
-                timeoutSeconds: 5
-                successThreshold: 1
-                failureThreshold: 6
-              livenessProbe:
-                httpGet:
-                  scheme: HTTPS
-                  path: /
-                  port: 443
-                initialDelaySeconds: 180
-                periodSeconds: 20
-                timeoutSeconds: 5
-                successThreshold: 1
-                failureThreshold: 6
-              volumeMounts:
-                data:
-                  name: data
-                  mountPath: /data
-                srv:
-                  name: srv
-                  mountPath: /srv
-                unifi:
-                  name: unifi
-                  mountPath: /var/lib/unifi
-                mongodb:
-                  name: mongodb
-                  mountPath: /var/lib/mongodb
-                log:
-                  name: log
-                  mountPath: /var/log
-                persistent:
-                  name: persistent
-                  mountPath: /persistent
-                run:
-                  name: run
-                  mountPath: /run
-                run-lock:
-                  name: run-lock
-                  mountPath: /run/lock
-                cgroup:
-                  name: cgroup
-                  mountPath: /sys/fs/cgroup
-                postgres-superuser-auth:
-                  enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.postgres.enabled }}
-                  name: postgres-superuser-auth
-                  mountPath: /run/secrets/postgres-superuser/pgpass
-                  subPath: pgpass
-                  readOnly: true
-              resources:
-                requests:
-                  cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.requests.cpu | quote }}
-                  memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifi.resources.requests.memory | quote }}
-                limits: _HT!{{ $l := (index . "PARENT_CONTEXT").Values.unifi.resources.limits }}{{ if $l.cpu }}{{ dict "memory" $l.memory "cpu" $l.cpu | toJson }}{{ else }}{{ dict "memory" $l.memory | toJson }}{{ end }}
-            journalctl:
-              image:
-                repository: _HT!{{ (index . "PARENT_CONTEXT").Values.image.repository | quote }}
-                tag: _HT!{{ (index . "PARENT_CONTEXT").Values.image.tag | quote }}
-              imagePullPolicy: Always
-              securityContext:
-                runAsUser: 0
-              command:
-                - /bin/bash
-                - -c
-                - |
-                  set -e
-                  # Wait for systemd to create journal files in shared volumes.
-                  # Without this, the sidecar can crash with "No journal files were found."
-                  while ! compgen -G "/run/log/journal/*/*.journal" > /dev/null \
-                    && ! compgen -G "/var/log/journal/*/*.journal" > /dev/null; do
-                    sleep 2
-                  done
-                  journal_dirs=()
-                  [ -d /run/log/journal ] && journal_dirs+=(--directory=/run/log/journal)
-                  [ -d /var/log/journal ] && journal_dirs+=(--directory=/var/log/journal)
-                  # Read all available journal files (including foreign machine-id dirs)
-                  # and follow new entries for kubectl logs -c journalctl.
-                  exec journalctl -f -o short-iso --no-pager --merge "${journal_dirs[@]}" | cut -c 27-
-              volumeMounts:
-                run:
-                  name: run
-                  mountPath: /run
-                log:
-                  name: log
-                  mountPath: /var/log
-              resources:
-                requests:
-                  cpu: 25m
-                  memory: 64Mi
-                limits:
-                  cpu: 250m
-                  memory: 256Mi
-            discovery-shim:
-              image:
-                repository: node
-                tag: "24-alpine"
-              imagePullPolicy: IfNotPresent
-              command:
-                - node
-                - --watch
-                - /scripts/shim.js
-              volumeMounts:
-                discovery-shim-script:
-                  name: discovery-shim-script
-                  mountPath: /scripts
-              resources:
-                requests:
-                  cpu: 10m
-                  memory: 32Mi
-                limits:
-                  cpu: 100m
-                  memory: 64Mi
-
-    # ------------------------------------------------------------------
-    # UniFi Exporter Deployment — https://github.com/unpoller/unpoller
-    # ------------------------------------------------------------------
-    deployment:
-      unifi-exporter:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.enabled }}
-        replicas: 1
-        pod:
-          containers:
-            main:
-              image:
-                repository: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.image.repository | quote }}
-                tag: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.image.tag | quote }}
-              imagePullPolicy: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.image.pullPolicy | quote }}
-              ports:
-                metrics:
-                  containerPort: 9130
-                  protocol: TCP
-              env:
-                UP_UNIFI_DEFAULT_URL:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.url | default (printf "https://unifi.%s.svc.cluster.local" ((index . "PARENT_CONTEXT").Release.Namespace)) | quote }}
-                UP_UNIFI_DEFAULT_USER:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.username | quote }}
-                UP_UNIFI_DEFAULT_PASS:
-                  valueFrom:
-                    secretKeyRef:
-                      name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
-                      key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.passwordKey | quote }}
-                      optional: true
-                UP_UNIFI_DEFAULT_API_KEY:
-                  valueFrom:
-                    secretKeyRef:
-                      name: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.name | default "unifi-exporter-secret" }}
-                      key: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.existingSecret.apiKeyKey | quote }}
-                      optional: true
-                UP_PROMETHEUS_DISABLE:
-                  value: "false"
-                UP_UNIFI_DEFAULT_VERIFY_SSL:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.verifyTLS | toString | quote }}
-                UP_INFLUXDB_DISABLE:
-                  value: "true"
-                UP_UNIFI_DEFAULT_SAVE_SITES:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveSites | toString | quote }}
-                UP_UNIFI_DEFAULT_SAVE_DPI:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveDpi | toString | quote }}
-                UP_UNIFI_DEFAULT_SAVE_EVENTS:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveEvents | toString | quote }}
-                UP_UNIFI_DEFAULT_SAVE_ALARMS:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveAlarms | toString | quote }}
-                UP_UNIFI_DEFAULT_SAVE_ANOMALIES:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveAnomalies | toString | quote }}
-                UP_UNIFI_DEFAULT_SAVE_IDS:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.saveIds | toString | quote }}
-                UP_UNIFI_DEFAULT_HASH_PII:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.hashPii | toString | quote }}
-                UP_PROMETHEUS_REPORT_ERRORS:
-                  value: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.config.reportErrors | toString | quote }}
-              resources:
-                requests:
-                  cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.resources.requests.cpu | quote }}
-                  memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.resources.requests.memory | quote }}
-                limits:
-                  cpu: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.resources.limits.cpu | quote }}
-                  memory: _HT!{{ (index . "PARENT_CONTEXT").Values.unifiExporter.resources.limits.memory | quote }}
-              livenessProbe:
-                httpGet:
-                  path: /
-                  port: metrics
-                initialDelaySeconds: 30
-                periodSeconds: 10
-                timeoutSeconds: 5
-                failureThreshold: 3
-              readinessProbe:
-                httpGet:
-                  path: /
-                  port: metrics
-                initialDelaySeconds: 5
-                periodSeconds: 5
-                timeoutSeconds: 3
-                failureThreshold: 3
-    # ------------------------------------------------------------------
-    # Backup CronJob — https://github.com/ConnorsApps/unifi-backup
-    # ------------------------------------------------------------------
-    cronjob:
-      unifi-backup:
-        enabled: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.enabled }}
-        schedule: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.schedule | quote }}
-        successfulJobsHistoryLimit: 3
-        failedJobsHistoryLimit: 3
-        concurrencyPolicy: Forbid
-        job:
-          pod:
-            restartPolicy: OnFailure
-            containers:
-              backup:
-                image:
-                  repository: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.image.repository | quote }}
-                  tag: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.image.tag | quote }}
-                imagePullPolicy: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.image.pullPolicy | quote }}
-                args:
-                  - "-config"
-                  - "/config/config.yaml"
-                env:
-                  UNIFI_PASS:
-                    valueFrom:
-                      secretKeyRef:
-                        name: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.existingSecret.name | default "unifi-backup-secret" }}
-                        key: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.existingSecret.passwordKey }}
-                  UNIFI_USER:
-                    value: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.username }}
-                  STORAGE_URL:
-                    valueFrom:
-                      secretKeyRef:
-                        name: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.existingSecret.name | default "unifi-backup-secret" }}
-                        key: _HT!{{ (index . "PARENT_CONTEXT").Values.backup.existingSecret.storageUrlKey }}
-                volumeMounts:
-                  config:
-                    name: config
-                    mountPath: /config
-                    readOnly: true
-                resources:
-                  requests:
-                    memory: "64Mi"
-                    cpu: "100m"
-                  limits:
-                    memory: "256Mi"
-            volumes:
-              config:
-                configMap:
-                  name: unifi-backup-config
+# Image pull secrets attached to every pod this chart creates directly
+# (monolith, unifi-exporter, unifi-backup).
+imagePullSecrets: []
 
 # ------------------------------------------------------------------
 # Backup — uses https://github.com/ConnorsApps/unifi-backup
@@ -1115,6 +96,15 @@ backup:
   #   s3://my-bucket?region=us-east-1
   storageUrl: "file://./backups"
 
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+    # DRA claim references for the backup container (see resourceClaims below).
+    claims: []
+
   # Reference a pre-existing Secret instead of creating one from password/storageUrl above.
   # Secret must contain the keys specified by *Key fields.
   existingSecret:
@@ -1141,6 +131,25 @@ backup:
       format: json
     retention:
       keepLast: 14
+
+  # CronJob pod scheduling overrides.
+  nodeSelector: {}
+  tolerations: []
+  priorityClassName: ""
+  terminationGracePeriodSeconds: null
+  topologySpreadConstraints: []
+  runtimeClassName: ""
+  hostAliases: []
+  dnsPolicy: ""
+  dnsConfig: {}
+  # Merged with the pod's required defaults (currently none).
+  podSecurityContext: {}
+  # Merged with the backup container's required defaults (currently none).
+  securityContext: {}
+  # Dynamic Resource Allocation (DRA) — claim GPUs/NICs/accelerators for the pod.
+  resourceClaims: []
+  extraEnv: []
+  extraVolumeMounts: []
 
 # ------------------------------------------------------------------
 # UniFi Exporter — uses https://github.com/unpoller/unpoller
@@ -1195,6 +204,33 @@ unifiExporter:
     limits:
       cpu: 200m
       memory: 256Mi
+    # DRA claim references for the exporter container (see resourceClaims below).
+    claims: []
+
+  # Deployment pod customization.
+  podAnnotations: {}
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  extraEnv: []
+  priorityClassName: ""
+  terminationGracePeriodSeconds: null
+  topologySpreadConstraints: []
+  runtimeClassName: ""
+  hostAliases: []
+  dnsPolicy: ""
+  dnsConfig: {}
+  # Merged with the pod's required defaults (currently none).
+  podSecurityContext: {}
+  # Merged with the exporter container's required defaults (currently none).
+  securityContext: {}
+  # Dynamic Resource Allocation (DRA) — claim GPUs/NICs/accelerators for the pod.
+  resourceClaims: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  service:
+    type: ClusterIP
+    annotations: {}
 
 # ------------------------------------------------------------------
 # RabbitMQ
@@ -1211,7 +247,6 @@ rabbitmq:
   # subchart reads from it. When global.rabbitmq.connection.existingSecret.name is set instead,
   # "rabbitmq-auth" is NOT created — you must override auth.existingSecret/existingPasswordKey/
   # existingErlangCookieKey here (or in your values file) to point at your secret.
-  # HULL _HT! cannot reach subchart pass-through values, so this cannot be done automatically.
   auth:
     enabled: true
     username: "unifi"
@@ -1369,6 +404,8 @@ unifi:
       memory: 2Gi
     limits:
       memory: 8Gi
+    # DRA claim references for the unifi-os container (see resourceClaims below).
+    claims: []
   storage:
     statefulset:
       storageClassName: ""
@@ -1416,3 +453,67 @@ unifi:
         enabled: false
         sectionName: ""
         backendPort: 5514
+  # StatefulSet pod customization.
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  priorityClassName: ""
+  terminationGracePeriodSeconds: null
+  topologySpreadConstraints: []
+  runtimeClassName: ""
+  hostAliases: []
+  dnsPolicy: ""
+  dnsConfig: {}
+  # Merged with the pod's required defaults (currently none).
+  podSecurityContext: {}
+  # Merged on top of the unifi-os container's required defaults
+  # (privileged: true, runAsUser: 0 — needed to run systemd as PID 1).
+  securityContext: {}
+  # Dynamic Resource Allocation (DRA) — claim GPUs/NICs/accelerators for the pod.
+  # e.g. for a DRA-managed NIC to let the pod join the local L2 broadcast
+  # domain for AP discovery without hostNetwork.
+  resourceClaims: []
+  # Extra env vars appended to the unifi-os container.
+  extraEnv: []
+  # Extra volumes/volumeMounts appended to the pod / unifi-os container.
+  extraVolumes: []
+  extraVolumeMounts: []
+  # Extra init containers appended after the built-in wait-postgres/init containers.
+  extraInitContainers: []
+  # Override the pod's serviceAccountName. Empty uses the namespace's default
+  # ServiceAccount (this chart does not create one).
+  serviceAccountName: ""
+  # Resource requests/limits for the journalctl and discovery-shim sidecar containers.
+  journalctl:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+  discoveryShim:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+  # Per-Service overrides. hotspotService/udpService are separate since UDP
+  # ports are commonly exposed a different way than the main TCP service
+  # (e.g. via Gateway API UDPRoute vs. a direct LoadBalancer/NodePort).
+  service:
+    type: ClusterIP
+    annotations: {}
+  hotspotService:
+    type: ClusterIP
+    annotations: {}
+  udpService:
+    type: ClusterIP
+    annotations: {}
+    # externalTrafficPolicy: Local preserves client source IP for STUN/discovery.
+    # Only meaningful when type is NodePort or LoadBalancer.
+    externalTrafficPolicy: ""
