@@ -3,6 +3,26 @@ entries:
   unifi-os:
   - apiVersion: v2
     appVersion: 5.1.21
+    created: "2026-07-23T21:12:46.376417738Z"
+    dependencies:
+    - condition: rabbitmq.enabled
+      name: rabbitmq
+      repository: oci://registry-1.docker.io/cloudpirates
+      version: 0.17.1
+    - alias: postgres
+      condition: postgres.enabled
+      name: cluster
+      repository: https://cloudnative-pg.github.io/charts
+      version: 0.4.0
+    description: UniFi OS Server - self-hosted UniFi management platform
+    digest: f03f3a1fa09021355163e4e5d8d3f05a473f487896a30e55b463a02e96e7fb91
+    name: unifi-os
+    type: application
+    urls:
+    - https://github.com/ConnorsApps/unifi-os-helm/releases/download/unifi-os-0.8.0/unifi-os-0.8.0.tgz
+    version: 0.8.0
+  - apiVersion: v2
+    appVersion: 5.1.21
     created: "2026-07-23T00:08:19.47232841Z"
     dependencies:
     - name: hull
@@ -315,4 +335,4 @@ entries:
     urls:
     - https://github.com/ConnorsApps/unifi-os-helm/releases/download/unifi-os-0.1.4/unifi-os-0.1.4.tgz
     version: 0.1.4
-generated: "2026-07-23T00:08:19.472412394Z"
+generated: "2026-07-23T21:12:46.376498097Z"
