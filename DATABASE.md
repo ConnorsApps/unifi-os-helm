@@ -77,7 +77,7 @@ stringData:
   password: "your-password"
 ```
 
-Roles may have unique passwords. The app pod reads `PGPASSWORD` from `pg-login-unifi-core`.
+Roles may have unique passwords. Each service reads its own password from its role's `pg-login-<rolename>` secret at startup; `pg-login-unifi-core` is only used for the app pod's own `PGPASSWORD` and the CNPG readiness check.
 
 ### Storage / HA
 

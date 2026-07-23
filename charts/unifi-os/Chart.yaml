@@ -3,7 +3,7 @@ name: unifi-os
 description: >-
   UniFi OS Server - self-hosted UniFi management platform
 type: application
-version: 0.7.0
+version: 0.7.1
 appVersion: "5.1.21"
 dependencies:
   - name: hull

@@ -543,48 +543,58 @@ hull:
                           path: unifi-identity-update/logging.config.props
                         - key: uid-agent.config.props
                           path: uid/logging.config.props
+                  # Per-role Postgres credentials (see templates/postgres-role-secrets.yaml
+                  # for chart-managed mode; useExistingSecrets: true users must create these
+                  # themselves — see DATABASE.md). unifi-core's own credential reaches the
+                  # init container via PGUSER/PGPASSWORD env vars instead (see below).
                   - secret:
-                      name: config-override-secret-ulp-go
+                      name: pg-login-ulp-go
                       optional: true
                       items:
-                        - key: config.props
-                          path: ulp-go/db.config.props
+                        - key: username
+                          path: ulp-go/db.username
+                        - key: password
+                          path: ulp-go/db.password
                   - secret:
-                      name: config-override-secret-unifi-credential-server
+                      name: pg-login-uid
                       optional: true
                       items:
-                        - key: config.props
-                          path: unifi-credential-server/db.config.props
+                        - key: username
+                          path: uid/db.username
+                        - key: password
+                          path: uid/db.password
                   - secret:
-                      name: config-override-secret-ucs-user-assets
+                      name: pg-login-unifi-credential-server
                       optional: true
                       items:
-                        - key: config.props
-                          path: ucs-user-assets/db.config.props
+                        - key: username
+                          path: unifi-credential-server/db.username
+                        - key: password
+                          path: unifi-credential-server/db.password
                   - secret:
-                      name: config-override-secret-unifi-directory
+                      name: pg-login-unifi-directory
                       optional: true
                       items:
-                        - key: config.props
-                          path: unifi-directory/db.config.props
+                        - key: username
+                          path: unifi-directory/db.username
+                        - key: password
+                          path: unifi-directory/db.password
                   - secret:
-                      name: config-override-secret-ucs-agent
+                      name: pg-login-ucs-agent
                       optional: true
                       items:
-                        - key: config.props
-                          path: ucs-agent/db.config.props
+                        - key: username
+                          path: ucs-agent/db.username
+                        - key: password
+                          path: ucs-agent/db.password
                   - secret:
-                      name: config-override-secret-unifi-identity-update
+                      name: pg-login-unifi-identity-update
                       optional: true
                       items:
-                        - key: config.props
-                          path: unifi-identity-update/db.config.props
-                  - secret:
-                      name: config-override-secret-uid-agent
-                      optional: true
-                      items:
-                        - key: config.props
-                          path: uid/db.config.props
+                        - key: username
+                          path: unifi-identity-update/db.username
+                        - key: password
+                          path: unifi-identity-update/db.password
             discovery-shim-script:
               configMap:
                 name: discovery-shim-script
@@ -701,10 +711,13 @@ hull:
                     _svc="${_entry%%|*}"; _r="${_entry#*|}"
                     _db_name="${_r%%|*}"; _r="${_r#*|}"
                     _db_user="${_r%%|*}"; _dst="${_r#*|}"
-                    _db_src="/run/secrets/overrides/${_svc}/db.config.props"
+                    _role_user_src="/run/secrets/overrides/${_db_user}/db.username"
+                    _role_pass_src="/run/secrets/overrides/${_db_user}/db.password"
                     _log_src="/run/secrets/overrides/${_svc}/logging.config.props"
-                    if [ -f "${_db_src}" ]; then
-                      cp "${_db_src}" "${_dst}"
+                    if [ -f "${_role_user_src}" ] && [ -f "${_role_pass_src}" ]; then
+                      printf 'db.name = %s\ndb.host = %s\ndb.port = %s\ndb.encrypted = false\ndb.username = %s\ndb.password = %s\n' \
+                        "${_db_name}" "${PGHOST}" "${PGPORT:-5432}" "$(cat "${_role_user_src}")" "$(cat "${_role_pass_src}")" \
+                        > "${_dst}"
                     elif [ -n "${PGHOST}" ] && [ -n "${PGPASSWORD}" ]; then
                       printf 'db.name = %s\ndb.host = %s\ndb.port = %s\ndb.encrypted = false\ndb.username = %s\ndb.password = %s\n' \
                         "${_db_name}" "${PGHOST}" "${PGPORT:-5432}" "${_db_user}" "${PGPASSWORD}" \
@@ -1366,50 +1379,6 @@ unifi:
         unifi: 10Gi
         log: 5Gi
         mongodb: 10Gi
-  configOverrides:
-    services:
-      - id: ulp-go
-        dbSecretName: config-override-secret-ulp-go
-        dbUser: ulp-go
-        dbName: ulp-go
-        targetPath: /data/ulp-go/ws/config.props
-        loggingKey: ulp-go.config.props
-      - id: unifi-credential-server
-        dbSecretName: config-override-secret-unifi-credential-server
-        dbUser: unifi-credential-server
-        dbName: unifi-credential-server
-        targetPath: /data/unifi-credential-server/ws/config.props
-        loggingKey: unifi-credential-server.config.props
-      - id: ucs-user-assets
-        dbSecretName: config-override-secret-ucs-user-assets
-        dbUser: unifi-credential-server
-        dbName: ucs-user-assets
-        targetPath: /data/ucs-user-assets/ws/config.props
-        loggingKey: ucs-user-assets.config.props
-      - id: unifi-directory
-        dbSecretName: config-override-secret-unifi-directory
-        dbUser: unifi-directory
-        dbName: unifi-directory
-        targetPath: /data/unifi-directory/ws/config.props
-        loggingKey: unifi-directory.config.props
-      - id: ucs-agent
-        dbSecretName: config-override-secret-ucs-agent
-        dbUser: ucs-agent
-        dbName: ucs-agent
-        targetPath: /data/ucs-agent/ws/config.props
-        loggingKey: ucs-agent.config.props
-      - id: unifi-identity-update
-        dbSecretName: config-override-secret-unifi-identity-update
-        dbUser: unifi-identity-update
-        dbName: unifi-identity-update
-        targetPath: /data/unifi-identity-update/ws/config.props
-        loggingKey: unifi-identity-update.config.props
-      - id: uid
-        dbSecretName: config-override-secret-uid-agent
-        dbUser: uid
-        dbName: uid
-        targetPath: /data/uid/ws/config.props
-        loggingKey: uid-agent.config.props
   # Hostname or IP that UniFi devices use to reach the controller for set-inform.
   # Set this to the externally reachable hostname or IP of the controller service.
   # Example: "192.168.1.100" or "unifi.example.com"
