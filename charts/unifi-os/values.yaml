@@ -289,7 +289,7 @@ postgres:
   fullnameOverride: unifi-postgres
   cluster:
     instances: 1
-    imageName: "ghcr.io/cloudnative-pg/postgresql:14-bookworm"
+    imageName: "ghcr.io/cloudnative-pg/postgresql:18-bookworm" # major upgrade tested live on 2026-08-23; requires CNPG operator >=1.26 and matching OS distro when bumping majors
     storage:
       size: 10Gi
       storageClass: ""
