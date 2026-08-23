@@ -399,7 +399,7 @@ spec:
           resources:
             {{- toYaml .Values.unifi.journalctl.resources | nindent 12 }}
         - name: discovery-shim
-          image: "node:24-alpine"
+          image: "{{ .Values.unifi.discoveryShim.image.repository }}:{{ .Values.unifi.discoveryShim.image.tag }}"
           imagePullPolicy: IfNotPresent
           command:
             - node
