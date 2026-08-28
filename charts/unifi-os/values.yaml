@@ -289,7 +289,18 @@ postgres:
   fullnameOverride: unifi-postgres
   cluster:
     instances: 1
-    imageName: "ghcr.io/cloudnative-pg/postgresql:18-bookworm" # major upgrade tested live on 2026-08-23; requires CNPG operator >=1.26 and matching OS distro when bumping majors
+    # PostgreSQL 14 is a hard ceiling, not a default to bump.
+    # UniFi's ulp-go (the login provider) emits SQL of the form "... = $1AND ...".
+    # PostgreSQL >=15 rejects a placeholder immediately followed by an identifier
+    # ("trailing junk after parameter", commit 2549f0661), so ulp-go fails in
+    # prepareMainEngine, exits 11, and systemd gives up after StartLimitBurst.
+    # unifi-core then proxies /api/auth/login to a dead 127.0.0.1:9080 and the
+    # console shows "Login Unavailable" — see DATABASE.md.
+    #
+    # Raising this again requires restarting ulp-go and confirming it comes back;
+    # a live pg_upgrade alone looks clean because already-open connections survive
+    # (that is exactly how 18-bookworm shipped in 0.9.0 and broke login).
+    imageName: "ghcr.io/cloudnative-pg/postgresql:14-bookworm"
     storage:
       size: 10Gi
       storageClass: ""

@@ -1,6 +1,9 @@
 # PostgreSQL Setup
 
-UniFi OS requires PostgreSQL 14. The chart supports two modes:
+UniFi OS requires PostgreSQL **14** — this is a ceiling, not a minimum. See
+[Version ceiling](#version-ceiling) before changing it.
+
+The chart supports two modes:
 
 | Mode | When to use |
 |------|-------------|
@@ -8,6 +11,39 @@ UniFi OS requires PostgreSQL 14. The chart supports two modes:
 | **External** (`postgres.enabled: false`) | You manage PostgreSQL yourself (self-hosted, RDS, etc.) |
 
 ---
+
+## Version ceiling
+
+**Do not run this on PostgreSQL 15 or newer.**
+
+UniFi's `ulp-go` (the login provider behind `/api/auth/login`) builds SQL in which a
+bind placeholder is immediately followed by a keyword — `... = $1AND ...`. PostgreSQL
+accepted that through 14; PostgreSQL 15 added the `param_junk` lexer rule
+([commit `2549f0661`](https://www.postgresql.org/docs/15/release-15.html)) and now
+rejects it:
+
+```
+ERROR:  trailing junk after parameter at or near "$1AND"
+```
+
+`ulp-go` hits this in `prepareMainEngine` while syncing `schema_migrations`, exits
+with status 11, and systemd stops retrying after `StartLimitBurst=10`. `unifi-core`
+then proxies logins to a dead `127.0.0.1:9080`, returns `401`, and the console shows
+**"Login Unavailable — Please reboot the console or try again later."** Nothing else
+breaks, which makes it easy to misread as an auth problem rather than a database one.
+
+Two traps when evaluating an upgrade:
+
+- **A live `pg_upgrade` looks clean.** `ulp-go`'s existing connections keep working, so
+  the console stays up until the next pod restart — possibly days later. Always restart
+  `ulp-go` (or the whole pod) as part of the test.
+- **CloudNativePG's major upgrade is one-way.** There is no in-place downgrade; getting
+  back to 14 means a logical dump from the newer server, stripping constructs that
+  `psql 14` cannot parse (`\restrict` / `\unrestrict` headers, `SET transaction_timeout`),
+  and restoring into a freshly created cluster.
+
+The ceiling lifts only when Ubiquiti fixes that SQL. Re-check on each UniFi OS Server
+release; note that PostgreSQL 14 reaches end-of-life in November 2026.
 
 ## Bundled CNPG
 
@@ -164,6 +200,14 @@ global:
 ---
 
 ## Troubleshooting
+
+**`Login Unavailable` in the web UI / `trailing junk after parameter` in the logs:**
+The Postgres server is 15 or newer. See [Version ceiling](#version-ceiling) — `ulp-go`
+cannot start against it. Confirm with:
+```bash
+kubectl exec -n unifi <pod> -c unifi-os -- systemctl is-active ulp-go
+kubectl exec -n unifi <pod> -c unifi-os -- tail /data/ulp-go/log/db.log
+```
 
 **Pod stuck in init:**
 The `wait-postgres` init container waits until the postgres host is reachable. Verify the CNPG cluster is ready and `connection.host` resolves.
