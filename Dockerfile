@@ -122,6 +122,13 @@ RUN set -eu \
     && [ -n "${_version}" ] || { echo "ERROR: VERSION build arg missing and unable to parse version from UOS_INSTALLER_URL"; exit 1; } \
     && echo "UOSSERVER.0000000.${_version}.0000000.000000.0000" > /bundle/rootfs/usr/lib/version
 
+# /usr/lib/app_model + /usr/lib/product_name: written by the real installer, missing
+# from the extracted image. Without them ubnt-tools reports an empty console model and
+# unifi-core (5.1.40+) aborts on boot with "Unsupported console model: \"\"".
+RUN mkdir -p /bundle/rootfs/usr/lib \
+    && printf '%s\n' 'UOSSERVER' > /bundle/rootfs/usr/lib/app_model \
+    && printf '%s\n' 'UniFi OS Server' > /bundle/rootfs/usr/lib/product_name
+
 # Patch upstream nginx logging to container stdio without replacing the full file.
 #
 # NOTE: nginx.conf.disabled is deliberately NOT patched here, even though

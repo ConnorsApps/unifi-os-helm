@@ -4,11 +4,11 @@ ROOT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Build configuration (override at runtime, e.g. make build TAG=latest)
 IMAGE ?= ghcr.io/connorsapps/unifi-os
-TAG ?= 5.1.21
+TAG ?= 5.1.40
 PLATFORMS ?= linux/amd64
-# amd64: https://fw-download.ubnt.com/data/unifi-os-server/f5e2-linux-x64-5.1.21-a400c9c6-8328-4634-b223-ebfcf742720a.21-x64
+# amd64: https://fw-download.ubnt.com/data/unifi-os-server/0e7e-linux-x64-5.1.40-149c6209-9218-4925-86d2-227b6b92f94d.40-x64
 # arm64: fetch the current arm64 URL from https://ui.com/download/software/unifi-os-server
-UOS_INSTALLER_URL ?= https://fw-download.ubnt.com/data/unifi-os-server/f5e2-linux-x64-5.1.21-a400c9c6-8328-4634-b223-ebfcf742720a.21-x64
+UOS_INSTALLER_URL ?= https://fw-download.ubnt.com/data/unifi-os-server/0e7e-linux-x64-5.1.40-149c6209-9218-4925-86d2-227b6b92f94d.40-x64
 
 # Extraction configuration
 CONTAINER ?= uosserver

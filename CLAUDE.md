@@ -10,7 +10,7 @@ A Helm chart that runs Ubiquiti's UniFi OS Server in Kubernetes. The project ext
 
 ### Build the Docker image
 ```bash
-make build TAG=5.1.21 PLATFORMS=linux/amd64
+make build TAG=5.1.40 PLATFORMS=linux/amd64
 # Uses podman. Requires binwalk, skopeo, umoci, curl, jq.
 # Override installer URL: make build UOS_INSTALLER_URL=<url>
 ```

@@ -19,8 +19,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  DEFAULT_IMAGE_TAG: 5.1.21
-  DEFAULT_UOS_INSTALLER_URL: https://fw-download.ubnt.com/data/unifi-os-server/f5e2-linux-x64-5.1.21-a400c9c6-8328-4634-b223-ebfcf742720a.21-x64
+  DEFAULT_IMAGE_TAG: 5.1.40
+  DEFAULT_UOS_INSTALLER_URL: https://fw-download.ubnt.com/data/unifi-os-server/0e7e-linux-x64-5.1.40-149c6209-9218-4925-86d2-227b6b92f94d.40-x64
 
 jobs:
   build-and-push:

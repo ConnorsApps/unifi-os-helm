@@ -52,7 +52,7 @@ global:
 
 image:
   repository: "ghcr.io/connorsapps/unifi-os"
-  tag: "5.1.21"
+  tag: "5.1.40"
 
 # ------------------------------------------------------------------
 # Chart-wide extensibility — applied across every object this chart renders
