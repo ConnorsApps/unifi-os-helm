@@ -10,10 +10,20 @@ A Helm chart that runs Ubiquiti's UniFi OS Server in Kubernetes. The project ext
 
 ### Build the Docker image
 ```bash
-make build TAG=5.1.40 PLATFORMS=linux/amd64
-# Uses podman. Requires binwalk, skopeo, umoci, curl, jq.
-# Override installer URL: make build UOS_INSTALLER_URL=<url>
+make build                         # version + installer URL/sha256 come from uos-version.env
+make build PLATFORMS=linux/arm64   # arm64 installer; `make build-all` builds both + a manifest
+make verify-image                  # static checks on the built image
+# Uses podman. Override the installer: make build UOS_INSTALLER_URL=<url> [UOS_INSTALLER_SHA256=<sha>]
 ```
+
+### Upgrade UniFi OS Server
+Use the `upgrade-unifi-os` skill (`.claude/skills/upgrade-unifi-os/SKILL.md`), which drives:
+```bash
+scripts/uos-latest.sh --check                # latest version, installer URLs, sha256, release notes (exit 10 = update)
+scripts/bump-uos-version.sh --latest         # uos-version.env + Chart.yaml + values.yaml image.tag
+make diff-upstream OLD=<url> NEW=<url>       # diff raw upstream rootfs between releases
+```
+Ubiquiti's hosts (`fw-update.ubnt.com`, `download.svc.ui.com`) are blocked in default cloud sandboxes; both scripts accept `--from-file` with a saved API response.
 
 ### Install/upgrade the chart
 ```bash
@@ -60,9 +70,9 @@ Beyond the domain values, `unifi.*` (StatefulSet), `unifiExporter.*` (exporter D
 
 ### Dockerfile
 Multi-stage build that:
-1. Downloads Ubiquiti's self-extracting installer binary
-2. Extracts the embedded OCI image using `binwalk`, `skopeo`, `umoci`
-3. Patches upstream systemd services (disables stub services, redirects nginx logs to stdout/stderr, stubs out embedded PostgreSQL)
+1. Downloads Ubiquiti's self-extracting installer binary for the target arch (`UOS_INSTALLER_URL_{AMD64,ARM64}`, verified against `UOS_INSTALLER_SHA256_*` when set)
+2. Extracts the embedded OCI image using `binwalk`, `skopeo`, `umoci` (`extractor` stage = raw upstream, used by `scripts/diff-uos-images.sh`)
+3. (`patcher` stage) Patches upstream systemd services (disables stub services, redirects nginx logs to stdout/stderr, stubs out embedded PostgreSQL)
 4. Bakes in PostgreSQL 14 client wrappers for external connections
 5. Generates `/entrypoint.sh` from the OCI runtime config
 
@@ -88,8 +98,10 @@ Both are disabled by default; enable in values:
 ## Key files
 | Path | Purpose |
 |------|---------|
-| `Dockerfile` | Image extraction and patching |
-| `Makefile` | Build, push, extraction targets |
+| `uos-version.env` | Pinned UniFi OS version + per-arch installer URLs/sha256 (read by Makefile, publish workflow, scripts) |
+| `Dockerfile` | Image extraction and patching; each patch guarded by `patch-target` so upstream changes fail the build (`PATCH_STRICT=false` to downgrade to warnings) |
+| `Makefile` | Build (`build`, `build-all`, `verify-image`), upgrade (`latest`, `check-update`, `bump`, `diff-upstream`), extraction targets |
+| `scripts/uos-latest.sh`, `scripts/bump-uos-version.sh`, `scripts/diff-uos-images.sh`, `scripts/verify-image.sh` | Upgrade automation (see `.claude/skills/upgrade-unifi-os/SKILL.md`) |
 | `charts/unifi-os/values.yaml` | Domain config (image, storage, TLS, Gateway routes, backup, exporter, postgres/rabbitmq passthrough) + curated override defaults |
 | `charts/unifi-os/templates/` | Plain Helm templates, one file per resource/resource group |
 | `charts/unifi-os/templates/_helpers.tpl` | Label + connection/secret/TLS resolution helpers |

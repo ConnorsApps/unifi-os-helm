@@ -8,8 +8,21 @@
 # skopeo converts it from Docker V2 to OCI format, and umoci unpacks the
 # rootfs + config without any manual layer handling.
 #
-# Build:
-#   docker build --build-arg UOS_INSTALLER_URL=<url> -t uosserver:<tag> .
+# Build (normally via `make build`, which reads uos-version.env):
+#   docker build --build-arg UOS_INSTALLER_URL_AMD64=<url> \
+#     --build-arg UOS_INSTALLER_SHA256_AMD64=<sha256> -t uosserver:<tag> .
+#
+# The installer is picked per target architecture (TARGETARCH, falling back to
+# the build container's dpkg arch), so one multi-platform build works:
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     --build-arg UOS_INSTALLER_URL_AMD64=... --build-arg UOS_INSTALLER_URL_ARM64=... .
+# UOS_INSTALLER_URL (+ UOS_INSTALLER_SHA256) overrides the per-arch URLs for a
+# single-arch build of an arbitrary installer.
+#
+# Every patch below first checks that its upstream target still exists
+# (patch-target helper). An upstream change that would make a patch silently
+# no-op fails the build instead; pass --build-arg PATCH_STRICT=false to turn
+# those failures into warnings while investigating.
 
 FROM debian:bookworm-slim AS extractor
 
@@ -25,9 +38,59 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG VERSION
+ARG TARGETARCH
 ARG UOS_INSTALLER_URL
+ARG UOS_INSTALLER_SHA256
+ARG UOS_INSTALLER_URL_AMD64
+ARG UOS_INSTALLER_SHA256_AMD64
+ARG UOS_INSTALLER_URL_ARM64
+ARG UOS_INSTALLER_SHA256_ARM64
+ARG PATCH_STRICT=true
 
-RUN curl -fsSL --retry 3 --retry-delay 5 -o /tmp/installer "$UOS_INSTALLER_URL" && chmod +x /tmp/installer
+# patch-target <file|grep|unit> ... — assert an upstream patch target exists.
+#   patch-target file <path> <what>
+#   patch-target grep <file> <ERE> <what>
+#   patch-target unit <unit-name> <what>     (searched in etc/lib/usr/lib systemd dirs)
+# Exits non-zero when missing unless PATCH_STRICT=false.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'set -u' \
+      'kind="$1"; shift' \
+      'case "$kind" in' \
+      '  file) what="$2"; [ -e "$1" ] && exit 0; detail="$1 does not exist" ;;' \
+      '  grep) what="$3"; [ -f "$1" ] && grep -Eq -- "$2" "$1" && exit 0; detail="no /$2/ in $1" ;;' \
+      '  unit) what="$2"; for d in etc/systemd/system lib/systemd/system usr/lib/systemd/system; do' \
+      '          [ -e "/bundle/rootfs/$d/$1" ] && exit 0; done; detail="unit $1 not found" ;;' \
+      '  *) echo "patch-target: unknown kind $kind" >&2; exit 2 ;;' \
+      'esac' \
+      'echo "PATCH TARGET MISSING: $what — $detail" >&2' \
+      'echo "  Upstream changed; review this patch (see .claude/skills/upgrade-unifi-os)." >&2' \
+      '[ "${PATCH_STRICT:-true}" = false ] && { echo "  PATCH_STRICT=false: continuing" >&2; exit 0; }' \
+      'exit 1' \
+      > /usr/local/bin/patch-target \
+    && chmod +x /usr/local/bin/patch-target
+
+RUN set -eu \
+    && _arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
+    && if [ -n "${UOS_INSTALLER_URL:-}" ]; then \
+         _url="$UOS_INSTALLER_URL"; _sha="${UOS_INSTALLER_SHA256:-}"; \
+       else \
+         case "$_arch" in \
+           amd64) _url="${UOS_INSTALLER_URL_AMD64:-}"; _sha="${UOS_INSTALLER_SHA256_AMD64:-}" ;; \
+           arm64) _url="${UOS_INSTALLER_URL_ARM64:-}"; _sha="${UOS_INSTALLER_SHA256_ARM64:-}" ;; \
+           *) echo "ERROR: unsupported architecture ${_arch}"; exit 1 ;; \
+         esac; \
+       fi \
+    && [ -n "$_url" ] || { echo "ERROR: no installer URL for ${_arch} (set the UOS_INSTALLER_URL_<ARCH> or UOS_INSTALLER_URL build arg)"; exit 1; } \
+    && echo "Installer (${_arch}): ${_url}" \
+    && printf '%s\n' "$_url" > /tmp/installer-url \
+    && curl -fsSL --retry 3 --retry-delay 5 -o /tmp/installer "$_url" \
+    && if [ -n "$_sha" ]; then \
+         echo "${_sha}  /tmp/installer" | sha256sum -c -; \
+       else \
+         echo "WARN: no sha256 provided; installer not verified"; \
+       fi \
+    && chmod +x /tmp/installer
 
 WORKDIR /tmp
 
@@ -67,10 +130,23 @@ RUN set -e \
     && skopeo copy "$SRC" "oci:/tmp/oci:uosserver:uosserver" \
     && umoci unpack --image /tmp/oci:uosserver:uosserver /bundle
 
+# ---------------------------------------------------------------------------
+# Everything above is the raw upstream image, unpacked to /bundle (rootfs +
+# OCI config.json). scripts/diff-uos-images.sh builds `--target extractor` to
+# compare two upstream releases before any of the patches below apply.
+# ---------------------------------------------------------------------------
+FROM extractor AS patcher
+
+# ARGs are per-stage: re-declare the ones the patch steps read.
+ARG VERSION
+ARG PATCH_STRICT=true
+
 # Linux Kubernetes pods usually do not resolve host.docker.internal.
 # Point unifi-core discovery client at localhost inside the container.
-RUN sed -i 's|host\.docker\.internal|localhost|g' \
-    /bundle/rootfs/etc/default/unifi-core_advanced
+RUN patch-target grep /bundle/rootfs/etc/default/unifi-core_advanced 'host\.docker\.internal' \
+         "unifi-core discovery host (host.docker.internal -> localhost)" \
+    && sed -i 's|host\.docker\.internal|localhost|g' \
+         /bundle/rootfs/etc/default/unifi-core_advanced
 
 # uos-discovery-client and uos-agent ship as stub binaries in the extracted
 # image — they exit immediately (printing "Stub package") without providing
@@ -78,7 +154,9 @@ RUN sed -i 's|host\.docker\.internal|localhost|g' \
 # which causes a tight restart storm that fills the journal with noise.
 # Drop-in overrides suppress the restart loop.  uos-discovery-client is also
 # disabled by default; keep it disabled since the stub never serves port 11002.
-RUN mkdir -p \
+RUN patch-target unit uos-discovery-client.service "uos-discovery-client no-restart drop-in" \
+    && patch-target unit uos-agent.service "uos-agent no-restart drop-in" \
+    && mkdir -p \
          /bundle/rootfs/etc/systemd/system/uos-discovery-client.service.d \
          /bundle/rootfs/etc/systemd/system/uos-agent.service.d \
     && printf '[Service]\nRestart=no\n' \
@@ -117,9 +195,9 @@ RUN mkdir -p /bundle/rootfs/usr/lib \
 RUN set -eu \
     && _version="${VERSION:-}" \
     && if [ -z "${_version}" ]; then \
-         _version="$(printf '%s' "${UOS_INSTALLER_URL}" | sed -nE 's#.*-([0-9]+\.[0-9]+\.[0-9]+)-.*#\1#p')"; \
+         _version="$(sed -nE 's#.*-([0-9]+\.[0-9]+\.[0-9]+)-.*#\1#p' /tmp/installer-url)"; \
        fi \
-    && [ -n "${_version}" ] || { echo "ERROR: VERSION build arg missing and unable to parse version from UOS_INSTALLER_URL"; exit 1; } \
+    && [ -n "${_version}" ] || { echo "ERROR: VERSION build arg missing and unable to parse version from the installer URL"; exit 1; } \
     && echo "UOSSERVER.0000000.${_version}.0000000.000000.0000" > /bundle/rootfs/usr/lib/version
 
 # /usr/lib/app_model + /usr/lib/product_name: written by the real installer, missing
@@ -146,7 +224,10 @@ RUN mkdir -p /bundle/rootfs/usr/lib \
 # same as before this patch existed.
 RUN set -e \
     && NGINX_CONF=/bundle/rootfs/etc/nginx/nginx.conf \
-    && [ -f "$NGINX_CONF" ] \
+    && patch-target file "$NGINX_CONF" "nginx.conf log redirection" \
+    && patch-target grep "$NGINX_CONF" '^[[:space:]]*access_log[[:space:]]+/data/unifi-core/logs/nginx-access\.log[[:space:]]+apm;' "nginx access_log -> stdout" \
+    && patch-target grep "$NGINX_CONF" '^[[:space:]]*error_log[[:space:]]+/data/unifi-core/logs/nginx-error\.log;' "nginx server error_log -> stderr" \
+    && patch-target grep "$NGINX_CONF" '^[[:space:]]*error_log[[:space:]]+/var/log/nginx/error\.log[[:space:]]+notice;' "nginx global error_log -> stderr" \
     && sed -E -i 's|^[[:space:]]*access_log[[:space:]]+/data/unifi-core/logs/nginx-access\.log[[:space:]]+apm;|    access_log /dev/stdout apm;|' "$NGINX_CONF" \
     && sed -E -i 's|^[[:space:]]*error_log[[:space:]]+/data/unifi-core/logs/nginx-error\.log;|    error_log /dev/stderr;|' "$NGINX_CONF" \
     && sed -E -i 's|^[[:space:]]*error_log[[:space:]]+/var/log/nginx/error\.log[[:space:]]+notice;|error_log  /dev/stderr notice;|' "$NGINX_CONF"
@@ -164,7 +245,8 @@ RUN set -e \
 # regardless of what's mounted there. The "+" prefix runs these steps as root
 # even though the unit's own User=/Group=mongodb would otherwise apply to
 # ExecStartPre too.
-RUN mkdir -p /bundle/rootfs/etc/systemd/system/mongodb.service.d \
+RUN patch-target unit mongodb.service "mongodb log/data dir drop-in" \
+    && mkdir -p /bundle/rootfs/etc/systemd/system/mongodb.service.d \
     && printf '%s\n' \
          '[Service]' \
          'ExecStartPre=+/bin/mkdir -p /var/log/mongodb' \
@@ -178,7 +260,8 @@ RUN mkdir -p /bundle/rootfs/etc/systemd/system/mongodb.service.d \
 # authentication when timedatectl reports NTPSynchronized=no. This wrapper
 # patches that single output line; all other timedatectl subcommands are
 # passed through unchanged.
-RUN mv /bundle/rootfs/usr/bin/timedatectl /bundle/rootfs/usr/bin/timedatectl.real \
+RUN patch-target file /bundle/rootfs/usr/bin/timedatectl "timedatectl NTPSynchronized wrapper" \
+    && mv /bundle/rootfs/usr/bin/timedatectl /bundle/rootfs/usr/bin/timedatectl.real \
     && printf '#!/bin/sh\n/usr/bin/timedatectl.real "$@" | sed '"'"'s/^no$/yes/'"'"'\n' \
          > /bundle/rootfs/usr/bin/timedatectl \
     && chmod +x /bundle/rootfs/usr/bin/timedatectl
@@ -257,7 +340,12 @@ RUN set -e \
 # Keep PostgreSQL 14 toolchain for compatibility with existing wrappers.
 # Keep MongoDB (mongod/mongos + config + data dir): UniFi Network manages its own
 # embedded MongoDB via the bundled mongodb.service unit.
+# The postgresql/{14,16} checks catch upstream changing its PostgreSQL majors,
+# which this removal list and the postgresql@14-main stubs above are written
+# against.
 RUN set -e \
+    && patch-target file /bundle/rootfs/usr/lib/postgresql/16 "embedded PostgreSQL 16 removal" \
+    && patch-target file /bundle/rootfs/usr/lib/postgresql/14 "PostgreSQL 14 client toolchain (psql wrappers)" \
     && rm -rf \
          /bundle/rootfs/usr/bin/mongo \
          /bundle/rootfs/usr/bin/rabbitmq* \
@@ -276,5 +364,5 @@ RUN set -e \
          /bundle/rootfs/usr/share/info
 
 FROM scratch
-COPY --from=extractor /bundle/rootfs/ /
+COPY --from=patcher /bundle/rootfs/ /
 ENTRYPOINT ["/entrypoint.sh"]

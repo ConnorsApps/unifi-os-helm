@@ -1,0 +1,40 @@
+{
+  "downloads": [
+    {
+      "id": 4846,
+      "name": "UniFi OS Server 5.1.42 for Linux (arm64)",
+      "version": "5.1.42",
+      "date_published": "2026-09-10",
+      "slug": "unifi-os-server-5.1.42-for-linux-(arm64)",
+      "file_url": "https://fw-download.ubnt.com/data/unifi-os-server/f730-linux-arm64-5.1.42-d2bca8bd-d6fc-4d20-99e5-b78235843c2f.42-arm64",
+      "release_notes_url": "https://community.ui.com/releases/r/uosserver/5.1.42",
+      "products": [{ "id": 671, "name": "UniFi OS Server", "slug": "unifi-os-server" }],
+      "filename": "f730-linux-arm64-5.1.42-d2bca8bd-d6fc-4d20-99e5-b78235843c2f.42-arm64",
+      "platform": null
+    },
+    {
+      "id": 4842,
+      "name": "UniFi OS Server 5.1.42 Windows (x64)",
+      "version": "5.1.42",
+      "date_published": "2026-09-10",
+      "slug": "unifi-os-server-5.1.42-for-windows-(x64)",
+      "file_url": "https://fw-download.ubnt.com/data/unifi-os-server/de50-windows-x64-msi-5.1.42-3500d5bc-1b49-42c0-8627-f3615b716801.exe",
+      "release_notes_url": "https://community.ui.com/releases/r/uosserver/5.1.42",
+      "products": [{ "id": 671, "name": "UniFi OS Server", "slug": "unifi-os-server" }],
+      "filename": "de50-windows-x64-msi-5.1.42-3500d5bc-1b49-42c0-8627-f3615b716801.exe",
+      "platform": "windows"
+    },
+    {
+      "id": 4841,
+      "name": "UniFi OS Server 5.1.42 for Linux (x64)",
+      "version": "5.1.42",
+      "date_published": "2026-09-10",
+      "slug": "unifi-os-server-5.1.42-for-linux-(x64)",
+      "file_url": "https://fw-download.ubnt.com/data/unifi-os-server/5172-linux-x64-5.1.42-12e9e3cf-8f8b-4e54-928c-76b80a10c8a4.42-x64",
+      "release_notes_url": "https://community.ui.com/releases/r/uosserver/5.1.42",
+      "products": [{ "id": 671, "name": "UniFi OS Server", "slug": "unifi-os-server" }],
+      "filename": "5172-linux-x64-5.1.42-12e9e3cf-8f8b-4e54-928c-76b80a10c8a4.42-x64",
+      "platform": null
+    }
+  ]
+}
