@@ -51,8 +51,9 @@ Helm release
 | Path | Purpose |
 |------|---------|
 | [Dockerfile](Dockerfile) | Extracts the upstream OCI image and repackages it as a standard Docker image. |
-| [Makefile](Makefile) | Build/push the image, extract configs, dump systemd maps. |
-| [Chart.yaml](charts/unifi-os/Chart.yaml) | Helm chart definition (app version 5.1.40) with subchart dependencies. |
+| [uos-version.env](uos-version.env) | Pinned UniFi OS Server version with per-arch installer URLs and checksums. |
+| [Makefile](Makefile) | Build the image (amd64/arm64), check for and apply upgrades, extract configs, dump systemd maps. |
+| [Chart.yaml](charts/unifi-os/Chart.yaml) | Helm chart definition (`appVersion` = UniFi OS version) with subchart dependencies. |
 | [values.yaml](charts/unifi-os/values.yaml) | Primary chart values — StatefulSet, services, secrets, Gateway API routes. |
 | [values.env.example.yaml](values.env-example.yaml) | Environment-specific overrides (registry, passwords, hostnames). |
 | [SERVICES.md](SERVICES.md) | Reference for every UniFi OS service, its role, and dependencies. |
