@@ -8,9 +8,13 @@
 # repo patches or depends on, and diffs the snapshots.
 #
 # Usage:
-#   scripts/diff-uos-images.sh [OLD_INSTALLER_URL [NEW_INSTALLER_URL]]
-#     OLD defaults to the amd64 installer pinned in uos-version.env
-#     NEW defaults to the latest amd64 installer (scripts/uos-latest.sh)
+#   scripts/diff-uos-images.sh [--old INSTALLER_URL] [--new INSTALLER_URL]
+#     --old defaults to the amd64 installer pinned in the committed (HEAD)
+#           uos-version.env
+#     --new defaults to the working-tree uos-version.env when it differs from
+#           HEAD (i.e. right after scripts/bump-uos-version.sh), otherwise to
+#           the latest release (scripts/uos-latest.sh)
+#   A URL matching a pinned one reuses its sha256 for download verification.
 #
 # Env: CONTAINER_ENGINE (default podman), PLATFORM (default linux/amd64),
 #      OUT_DIR (default file-dumps/upgrade-<old>-<new>)
@@ -21,21 +25,57 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE="${CONTAINER_ENGINE:-podman}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 
-env_get() { sed -n "s/^$1=//p" "$ROOT/uos-version.env"; }
-version_of() { printf '%s' "${1##*/}" | sed -nE 's#.*-([0-9]+\.[0-9]+\.[0-9]+)-.*#\1#p'; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 
-old_url="${1:-$(env_get UOS_INSTALLER_URL_AMD64)}"
-old_sha=""
-[ $# -ge 1 ] || old_sha="$(env_get UOS_INSTALLER_SHA256_AMD64)"
-if [ $# -ge 2 ]; then
-  new_url="$2"; new_sha=""
-else
-  meta="$("$ROOT/scripts/uos-latest.sh")" \
-    || { echo "ERROR: pass NEW_INSTALLER_URL explicitly (latest release lookup failed)" >&2; exit 1; }
-  new_url="$(printf '%s\n' "$meta" | sed -n 's/^UOS_INSTALLER_URL_AMD64=//p')"
-  new_sha="$(printf '%s\n' "$meta" | sed -n 's/^UOS_INSTALLER_SHA256_AMD64=//p')"
+old_url="" new_url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --old) old_url="${2:?--old needs an installer URL}"; shift ;;
+    --new) new_url="${2:?--new needs an installer URL}"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 1 ;;
+  esac
+  shift
+done
+
+version_of() { printf '%s' "${1##*/}" | sed -nE 's#.*-([0-9]+\.[0-9]+\.[0-9]+)-.*#\1#p'; }
+# kv <KEY> — read a key from KEY=value text on stdin
+kv() { sed -n "s/^$1=//p"; }
+
+pinned_head="$(git -C "$ROOT" show HEAD:uos-version.env 2>/dev/null || cat "$ROOT/uos-version.env")"
+pinned_tree="$(cat "$ROOT/uos-version.env")"
+latest=""
+
+old_url="${old_url:-$(printf '%s\n' "$pinned_head" | kv UOS_INSTALLER_URL_AMD64)}"
+if [ -z "$new_url" ]; then
+  if [ "$pinned_head" != "$pinned_tree" ]; then
+    new_url="$(printf '%s\n' "$pinned_tree" | kv UOS_INSTALLER_URL_AMD64)"
+    echo "==> NEW from working-tree uos-version.env" >&2
+  else
+    latest="$("$ROOT/scripts/uos-latest.sh")" \
+      || { echo "ERROR: latest release lookup failed; pass --new <installer-url>" >&2; exit 1; }
+    new_url="$(printf '%s\n' "$latest" | kv UOS_INSTALLER_URL_AMD64)"
+    echo "==> NEW from latest release" >&2
+  fi
 fi
+
+# sha256_for <url> — checksum from any known pin (HEAD, working tree, latest)
+sha256_for() {
+  local src
+  for src in "$pinned_head" "$pinned_tree" "$latest"; do
+    [ -n "$src" ] || continue
+    if [ "$(printf '%s\n' "$src" | kv UOS_INSTALLER_URL_AMD64)" = "$1" ]; then
+      printf '%s\n' "$src" | kv UOS_INSTALLER_SHA256_AMD64; return
+    fi
+    if [ "$(printf '%s\n' "$src" | kv UOS_INSTALLER_URL_ARM64)" = "$1" ]; then
+      printf '%s\n' "$src" | kv UOS_INSTALLER_SHA256_ARM64; return
+    fi
+  done
+}
+old_sha="$(sha256_for "$old_url")"
+new_sha="$(sha256_for "$new_url")"
 [ -n "$old_url" ] && [ -n "$new_url" ] || { echo "ERROR: missing installer URL(s)" >&2; exit 1; }
+[ "$old_url" != "$new_url" ] || { echo "ERROR: old and new installer are the same ($old_url)" >&2; exit 1; }
 
 old_ver="$(version_of "$old_url")"; old_ver="${old_ver:-old}"
 new_ver="$(version_of "$new_url")"; new_ver="${new_ver:-new}"

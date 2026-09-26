@@ -25,7 +25,7 @@ FW_UPDATE_URL='https://fw-update.ubnt.com/api/firmware-latest?filter=eq~~product
 SOFTWARE_DOWNLOADS_URL='https://download.svc.ui.com/v1/software-downloads'
 RELEASE_NOTES_BASE='https://community.ui.com/releases/r/uosserver'
 
-usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 
 format="env"
 check=false
@@ -84,13 +84,18 @@ if [ -n "$from_file" ]; then
   if [ "$source" = auto ]; then
     if jq -e 'has("_embedded")?' "$from_file" >/dev/null 2>&1; then source=fw-update; else source=software-downloads; fi
   fi
-  assets="$(normalize "$source" < "$from_file")"
+  assets="$(normalize "$source" < "$from_file" 2>/dev/null)" \
+    || { echo "ERROR: $from_file is not a fw-update or software-downloads API response" >&2; exit 1; }
 else
   requested="$source"
   if [ "$requested" = auto ] || [ "$requested" = fw-update ]; then
     if raw="$(fetch "$FW_UPDATE_URL")"; then
-      assets="$(printf '%s' "$raw" | normalize fw-update)"
-      source=fw-update
+      if assets="$(printf '%s' "$raw" | normalize fw-update 2>/dev/null)"; then
+        source=fw-update
+      else
+        assets=""
+        echo "WARN: fw-update API returned an unparseable response" >&2
+      fi
     else
       echo "WARN: fw-update API unreachable" >&2
     fi
@@ -98,14 +103,20 @@ else
   if { [ -z "$assets" ] || [ "$assets" = "[]" ]; } \
       && { [ "$requested" = auto ] || [ "$requested" = software-downloads ]; }; then
     if raw="$(fetch "$SOFTWARE_DOWNLOADS_URL")"; then
-      assets="$(printf '%s' "$raw" | normalize software-downloads)"
-      source=software-downloads
-      echo "WARN: using download.svc.ui.com fallback — no sha256 checksums available" >&2
+      if assets="$(printf '%s' "$raw" | normalize software-downloads 2>/dev/null)"; then
+        source=software-downloads
+        echo "WARN: using download.svc.ui.com fallback — no sha256 checksums available" >&2
+      else
+        assets=""
+        echo "WARN: download.svc.ui.com returned an unparseable response" >&2
+      fi
+    else
+      echo "WARN: download.svc.ui.com unreachable" >&2
     fi
   fi
   if [ -z "$assets" ]; then
     cat >&2 <<EOF
-ERROR: could not reach Ubiquiti's release APIs (network policy?).
+ERROR: no usable response from Ubiquiti's release APIs (network policy?).
 Fetch the metadata on a machine with access and pass it in:
   curl -s '$FW_UPDATE_URL' > fw-update.json
   $0 --from-file fw-update.json
@@ -114,10 +125,21 @@ EOF
   fi
 fi
 
+if [ "$(printf '%s' "$assets" | jq length)" -eq 0 ]; then
+  echo "ERROR: no Linux UniFi OS Server installers found in the $source response" >&2
+  exit 1
+fi
+
+# firmware-latest reports the newest build per platform, so one arch can lag
+# the other; only the newest version is kept, so say what gets dropped.
+printf '%s' "$assets" | jq -r '
+  (map(.version) | max_by(split(".") | map(tonumber? // 0))) as $v
+  | .[] | select(.version != $v)
+  | "WARN: \(.platform) is still at \(.version) (latest is \($v)); it is omitted"' >&2
+
 # Keep only the newest version (numeric compare, not string compare).
 release="$(printf '%s' "$assets" | jq -c --arg notes "$RELEASE_NOTES_BASE" --arg source "$source" '
-  if length == 0 then error("no Linux UniFi OS Server installers found in response") else . end
-  | (max_by(.version | split(".") | map(tonumber? // 0)) | .version) as $v
+  (max_by(.version | split(".") | map(tonumber? // 0)) | .version) as $v
   | [.[] | select(.version == $v)] as $a
   | {version: $v,
      released: ([$a[].released | select(. != "")] | first // ""),

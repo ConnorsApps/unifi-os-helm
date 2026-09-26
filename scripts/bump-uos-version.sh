@@ -22,7 +22,7 @@ VERSION_FILE="$ROOT/uos-version.env"
 CHART_FILE="$ROOT/charts/unifi-os/Chart.yaml"
 VALUES_FILE="$ROOT/charts/unifi-os/values.yaml"
 
-usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 mode=""
@@ -72,6 +72,10 @@ current_version="$(sed -n 's/^UOS_VERSION=//p' "$VERSION_FILE")"
 [[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version '$new_version' is not X.Y.Z"
 [ -n "$url_amd64" ] || die "an amd64 installer URL is required (--url-amd64)"
 if [ "$force" != true ]; then
+  if [ "$mode" != manual ] && [ "$new_version" = "$current_version" ]; then
+    echo "Already at $current_version (latest release) — nothing to do."
+    exit 0
+  fi
   [ "$new_version" != "$current_version" ] || die "already at $current_version (use --force to re-apply)"
   newest="$(printf '%s\n%s\n' "$current_version" "$new_version" | sort -V | tail -n1)"
   [ "$newest" = "$new_version" ] || die "$new_version is older than current $current_version (use --force)"

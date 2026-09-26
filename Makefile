@@ -16,9 +16,16 @@ UOS_INSTALLER_URL ?=
 UOS_INSTALLER_SHA256 ?=
 # Set to false to turn Dockerfile patch-target failures into warnings.
 PATCH_STRICT ?= true
+# Platform for verify-image (e.g. linux/arm64 for a build-all -arm64 tag).
+PLATFORM ?=
+
+# UniFi version baked into /usr/lib/version. Independent of TAG so custom tags
+# (latest, test, <v>-arm64) don't leak into the image; empty with an installer
+# override, in which case the Dockerfile parses it from the installer URL.
+UOS_BUILD_VERSION = $(if $(UOS_INSTALLER_URL),,$(UOS_VERSION))
 
 BUILD_ARGS = \
-	--build-arg "VERSION=$(TAG)" \
+	--build-arg "VERSION=$(UOS_BUILD_VERSION)" \
 	--build-arg "UOS_INSTALLER_URL=$(UOS_INSTALLER_URL)" \
 	--build-arg "UOS_INSTALLER_SHA256=$(UOS_INSTALLER_SHA256)" \
 	--build-arg "UOS_INSTALLER_URL_AMD64=$(UOS_INSTALLER_URL_AMD64)" \
@@ -28,7 +35,7 @@ BUILD_ARGS = \
 	--build-arg "PATCH_STRICT=$(PATCH_STRICT)"
 
 # Upgrade helpers: FROM_FILE = saved fw-update API response (offline bump);
-# OLD/NEW = installer URLs to diff (default: pinned amd64 vs latest amd64).
+# OLD/NEW = installer URLs to diff (defaults: see scripts/diff-uos-images.sh).
 FROM_FILE ?=
 OLD ?=
 NEW ?=
@@ -47,7 +54,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make build                      Build the UniFi OS image for PLATFORMS (podman)"
 	@echo "  make build-all                  Build amd64 + arm64 and assemble a multi-arch manifest"
-	@echo "  make verify-image               Static checks on the built image (patched files present)"
+	@echo "  make verify-image [PLATFORM=linux/arm64]  Static checks on the built image"
 	@echo "  make latest                     Show the latest UniFi OS Server release from Ubiquiti"
 	@echo "  make check-update               Compare uos-version.env with the latest release"
 	@echo "  make bump [FROM_FILE=fw.json]   Bump uos-version.env + chart to the latest release"
@@ -63,8 +70,11 @@ build:
 		--tag "$(IMAGE):$(TAG)"
 
 # One build per arch, then a manifest list under $(IMAGE):$(TAG).
+# arm64 on an x86 host needs qemu-user-static (binfmt) for the RUN steps.
+# Verify each: make verify-image TAG=$(TAG)-arm64 PLATFORM=linux/arm64
 # Push with: podman manifest push --all $(IMAGE):$(TAG) docker://$(IMAGE):$(TAG)
 build-all:
+	@test -z "$(UOS_INSTALLER_URL)" || { echo "build-all uses the per-arch URLs in uos-version.env; unset UOS_INSTALLER_URL"; exit 1; }
 	@test -n "$(UOS_INSTALLER_URL_ARM64)" || { echo "UOS_INSTALLER_URL_ARM64 is empty in uos-version.env"; exit 1; }
 	podman build . --platform linux/amd64 $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)-amd64"
 	podman build . --platform linux/arm64 $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)-arm64"
@@ -75,7 +85,7 @@ build-all:
 	podman manifest inspect "$(IMAGE):$(TAG)"
 
 verify-image:
-	"$(ROOT_DIR)scripts/verify-image.sh" "$(IMAGE):$(TAG)" "$(TAG)"
+	PLATFORM="$(PLATFORM)" "$(ROOT_DIR)scripts/verify-image.sh" "$(IMAGE):$(TAG)" "$(UOS_BUILD_VERSION)"
 
 latest:
 	"$(ROOT_DIR)scripts/uos-latest.sh"
@@ -88,7 +98,7 @@ bump:
 	"$(ROOT_DIR)scripts/bump-uos-version.sh" $(if $(FROM_FILE),--from-file "$(FROM_FILE)",--latest)
 
 diff-upstream:
-	"$(ROOT_DIR)scripts/diff-uos-images.sh" $(if $(OLD),"$(OLD)") $(if $(NEW),"$(NEW)")
+	"$(ROOT_DIR)scripts/diff-uos-images.sh" $(if $(OLD),--old "$(OLD)") $(if $(NEW),--new "$(NEW)")
 
 extract-container-configs:
 	mkdir -p "$(ROOT_DIR)$(FILE_DUMPS_DIR)"

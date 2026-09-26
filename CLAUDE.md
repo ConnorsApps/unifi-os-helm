@@ -21,7 +21,7 @@ Use the `upgrade-unifi-os` skill (`.claude/skills/upgrade-unifi-os/SKILL.md`), w
 ```bash
 scripts/uos-latest.sh --check                # latest version, installer URLs, sha256, release notes (exit 10 = update)
 scripts/bump-uos-version.sh --latest         # uos-version.env + Chart.yaml + values.yaml image.tag
-make diff-upstream OLD=<url> NEW=<url>       # diff raw upstream rootfs between releases
+make diff-upstream                           # diff raw upstream rootfs: committed pin vs bumped tree (or OLD=/NEW= URLs)
 ```
 Ubiquiti's hosts (`fw-update.ubnt.com`, `download.svc.ui.com`) are blocked in default cloud sandboxes; both scripts accept `--from-file` with a saved API response.
 

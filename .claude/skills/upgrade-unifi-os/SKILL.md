@@ -36,15 +36,15 @@ scripts/bump-uos-version.sh --latest            # or --from-file fw-update.json
 # specific version: scripts/bump-uos-version.sh 5.1.42 --url-amd64 URL --sha256-amd64 SHA [--url-arm64 URL --sha256-arm64 SHA]
 ```
 
-Writes `uos-version.env`, `Chart.yaml` (appVersion + patch bump of chart version; `--minor` if chart templates/values also changed), `values.yaml` `image.tag`, runs `helm lint` and the render matrix when available, and warns about any remaining references to the old version (fix real ones; historical comments are fine).
+Exits 0 with "nothing to do" when already on the latest release. Otherwise writes `uos-version.env`, `Chart.yaml` (appVersion + patch bump of chart version; `--minor` if chart templates/values also changed), `values.yaml` `image.tag`, runs `helm lint` and the render matrix when available, and warns about any remaining references to the old version (fix real ones; historical comments are fine).
 
 ## 3. Diff upstream (needs podman/docker + network; usually the user's machine)
 
 ```bash
-make diff-upstream                 # pinned-before-bump vs latest; or OLD=<url> NEW=<url>
+make diff-upstream                 # committed pin (HEAD) vs bumped working tree; or OLD=<url> NEW=<url>
 ```
 
-Run it **before** step 2 so the default OLD is still the previous release, or pass OLD explicitly. It builds the Dockerfile's raw `extractor` stage for both installers and writes `file-dumps/upgrade-<old>-<new>/upstream.diff`. Review against every patch in the Dockerfile `patcher` stage:
+Defaults: OLD = amd64 installer in the committed `uos-version.env`; NEW = the working-tree one after step 2 (or the latest release if nothing is bumped yet). Known URLs reuse their pinned sha256. It builds the Dockerfile's raw `extractor` stage for both installers and writes `file-dumps/upgrade-<old>-<new>/upstream.diff`. Review against every patch in the Dockerfile `patcher` stage:
 
 | Snapshot | What to look for |
 |---|---|
@@ -61,7 +61,8 @@ New services may also need `SERVICES.md` updates.
 ```bash
 make build                         # amd64 (PLATFORMS=linux/arm64 for arm64)
 make verify-image                  # static checks: patched files present, stripped parts gone
-make build-all                     # optional: amd64 + arm64 manifest (arm64 is slow under QEMU)
+make build-all                     # optional: amd64 + arm64 manifest (x86 host needs qemu-user-static; slow)
+make verify-image TAG=<version>-arm64 PLATFORM=linux/arm64
 ```
 
 Every Dockerfile patch is guarded by `patch-target`; a build failure reading `PATCH TARGET MISSING: <what>` means upstream moved that target. Find where it went (upstream diff, or `make build PATCH_STRICT=false` then inspect the image), update the patch and its `patch-target` guard together. Never leave `PATCH_STRICT=false` as the fix.
@@ -86,5 +87,5 @@ arm64 images can't be boot-tested without an arm64 node — report them as "buil
 ## 6. Finish
 
 - One commit: `Upgrade to unifi-os X.Y.Z` (version files + any Dockerfile/SERVICES.md/skill-table changes).
-- Merging to `main` publishes the image (`publish-image.yml`, triggered by `uos-version.env`/`Dockerfile` changes; amd64 + arm64 when an arm64 URL is set) and releases the chart.
+- Merging to `main` publishes the image and releases the chart. `publish-image.yml` reads `uos-version.env` and builds amd64 + arm64 **only if its workflow update has landed** — check for `. ./uos-version.env` in it. If it still has hardcoded `DEFAULT_IMAGE_TAG`/`DEFAULT_UOS_INSTALLER_URL` (bump-uos-version.sh flags them as stale), update those too; agents' tokens usually can't push workflow files, so hand that edit to the user.
 - In the summary, state what was verified (lint / build / verify-image / runtime) and what wasn't.
