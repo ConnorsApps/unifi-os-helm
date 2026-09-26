@@ -1,0 +1,63 @@
+{
+  "_embedded": {
+    "firmware": [
+      {
+        "channel": "release",
+        "created": "2026-09-10T13:48:20Z",
+        "file_size": 770177202,
+        "id": "09232753-c27a-4ab6-ae28-f96ffbc66f79",
+        "md5": "2ad5d744a3be5866d31018d31540fb59",
+        "sha256_checksum": "8e29bd50cde8f781ace4b85599256ef62c02723bdc751044d4db90a087fb5207",
+        "platform": "linux-arm64",
+        "product": "unifi-os-server",
+        "updated": "2026-09-10T13:48:20Z",
+        "version": "v5.1.42",
+        "version_major": 5,
+        "version_minor": 1,
+        "version_patch": 42,
+        "_links": {
+          "self": { "href": "https://fw-update.ui.com/api/firmware/09232753-c27a-4ab6-ae28-f96ffbc66f79" },
+          "data": { "href": "https://fw-download.ubnt.com/data/unifi-os-server/f730-linux-arm64-5.1.42-d2bca8bd-d6fc-4d20-99e5-b78235843c2f.42-arm64" }
+        }
+      },
+      {
+        "channel": "release",
+        "created": "2026-09-10T13:48:20Z",
+        "file_size": 785796978,
+        "id": "b34f21ed-0e59-486a-a7a3-5b357829b75a",
+        "md5": "ec6f80e54fe6fd80e681e59d1e3d6e37",
+        "sha256_checksum": "f6111e9396a42c74016f5dde9b01fbef486a6fe69efe137935e6e38b7c22f94d",
+        "platform": "linux-x64",
+        "product": "unifi-os-server",
+        "updated": "2026-09-10T13:48:20Z",
+        "version": "v5.1.42",
+        "version_major": 5,
+        "version_minor": 1,
+        "version_patch": 42,
+        "_links": {
+          "self": { "href": "https://fw-update.ui.com/api/firmware/b34f21ed-0e59-486a-a7a3-5b357829b75a" },
+          "data": { "href": "https://fw-download.ubnt.com/data/unifi-os-server/5172-linux-x64-5.1.42-12e9e3cf-8f8b-4e54-928c-76b80a10c8a4.42-x64" }
+        }
+      },
+      {
+        "channel": "release",
+        "created": "2026-09-10T13:48:20Z",
+        "file_size": 1355459896,
+        "id": "fdb0c2ac-5e3e-4bdd-9f86-c87efeb6271c",
+        "md5": "70b9c7a8a9afaf1c0271d104cbd50c44",
+        "sha256_checksum": "909db093a48d4091453dfbf52e31994f99dee00d763d4ee885310587aed48562",
+        "platform": "windows-x64-msi",
+        "product": "unifi-os-server",
+        "updated": "2026-09-10T13:48:20Z",
+        "version": "v5.1.42",
+        "version_major": 5,
+        "version_minor": 1,
+        "version_patch": 42,
+        "_links": {
+          "self": { "href": "https://fw-update.ui.com/api/firmware/fdb0c2ac-5e3e-4bdd-9f86-c87efeb6271c" },
+          "data": { "href": "https://fw-download.ubnt.com/data/unifi-os-server/de50-windows-x64-msi-5.1.42-3500d5bc-1b49-42c0-8627-f3615b716801.exe" }
+        }
+      }
+    ]
+  }
+}
