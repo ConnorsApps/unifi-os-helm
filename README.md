@@ -1,22 +1,20 @@
 # UniFi OS Server — Kubernetes Helm Chart
 
-A Helm chart that runs Ubiquiti's [UniFi OS Server](https://ui.com/download/unifi-os-server) in Kubernetes —
-letting you self-host the **UniFi Network** application (the controller for
-switches, APs, gateways, etc.) without buying a UniFi Console. This is the
-successor to the standalone Network Application that Ubiquiti previously offered.
+Runs Ubiquiti's [UniFi OS Server](https://ui.com/download/unifi-os-server) in
+Kubernetes, so you can self-host the **UniFi Network** application (the
+controller for switches, APs and gateways) without a UniFi Console. It succeeds
+the standalone Network Application.
 
-UniFi OS Server does **not** support UniFi Protect (cameras), Access, Talk, or
-Connect — those still require a UniFi Console.
+UniFi OS Server does **not** support Protect, Access, Talk or Connect; those
+still need a Console.
 
-The upstream runtime model (systemd managing ~15 tightly coupled services) is
-kept intact. PostgreSQL and RabbitMQ are exposed as explicit, replaceable
-dependencies (bundled subcharts or external instances). MongoDB runs embedded
-inside the container via the bundled `mongodb.service` — it is hardcoded by
-UniFi and cannot be externalized.
-
-> **Warning** — this project is experimental and not suitable for production yet. There's a lot of AI work I don't have time to verify all of.
+> **Warning:** experimental, not production-ready. There's a lot of AI work I don't have time to verify all of.
 
 ## Architecture
+
+Upstream systemd, managing ~15 tightly coupled services, runs intact in one
+container. PostgreSQL and RabbitMQ run outside it (bundled subcharts or your
+own). MongoDB stays embedded: UniFi hardcodes it.
 
 ### Upstream (what Ubiquiti ships 🤮)
 
@@ -45,41 +43,21 @@ Helm release
   └─ RabbitMQ            (CloudPirates subchart or external)
 ```
 
-
-## Repository contents
-
-| Path | Purpose |
-|------|---------|
-| [Dockerfile](Dockerfile) | Extracts the upstream OCI image and repackages it as a standard Docker image. |
-| [uos-version.env](uos-version.env) | Pinned UniFi OS Server version with per-arch installer URLs and checksums. |
-| [Makefile](Makefile) | Build the image (amd64/arm64), check for and apply upgrades, extract configs, dump systemd maps. |
-| [Chart.yaml](charts/unifi-os/Chart.yaml) | Helm chart definition (`appVersion` = UniFi OS version) with subchart dependencies. |
-| [values.yaml](charts/unifi-os/values.yaml) | Primary chart values — StatefulSet, services, secrets, Gateway API routes. |
-| [values.env.example.yaml](values.env.example.yaml) | Environment-specific overrides (registry, passwords, hostnames). |
-| [SERVICES.md](SERVICES.md) | Reference for every UniFi OS service, its role, and dependencies. |
-| [DATABASE.md](DATABASE.md) | PostgreSQL setup — bundled CNPG and external, credential options. |
-| [TLS.md](TLS.md) | TLS certificate options — self-signed, existing secret, cert-manager. |
-| `charts/unifi-os/templates/` | Plain Helm templates for every rendered object, plus shared naming/labeling helpers. |
-| `scripts/` | Extraction utilities for reverse-engineering the upstream image. |
-
 ## Prerequisites
 
-- Kubernetes
-- Helm 3+
-- [CloudNativePG operator](https://cloudnative-pg.io/) if using the bundled PostgreSQL subchart (`postgres.enabled: true`)
-- [cert-manager](https://cert-manager.io/) if using `unifi.tls.certManager.enabled: true` (optional but recommended)
+- Kubernetes and Helm 3
+- [CloudNativePG operator](https://cloudnative-pg.io/) for the bundled PostgreSQL (`postgres.enabled: true`)
+- [cert-manager](https://cert-manager.io/) for `unifi.tls.certManager` (optional)
 
 ## Quick start
 
-### 1. Configure
-
 ```bash
-cp values.env.example.yaml values.env.yaml
+cp values.env.example.yaml values.env.yaml   # set passwords, storage, routes
+helm repo add unifi-os https://connorsapps.github.io/unifi-os-helm
+helm upgrade --install unifi unifi-os/unifi-os -n unifi --create-namespace -f values.env.yaml
 ```
 
-Set credentials for PostgreSQL and RabbitMQ. The recommended approach is
-`existingSecretPrefix` for PostgreSQL (no plaintext in Helm values) — see
-[DATABASE.md](DATABASE.md) for full details. Minimal plaintext example:
+Minimal credentials (see [DATABASE.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/DATABASE.md) for secret-based options):
 
 ```yaml
 global:
@@ -92,67 +70,33 @@ global:
       erlangCookie: "your-erlang-cookie"
 ```
 
-### 2. Install
+## Configuration
+
+| Topic | Where |
+|---|---|
+| Every value, with defaults | [values.yaml](https://github.com/ConnorsApps/unifi-os-helm/blob/main/charts/unifi-os/values.yaml) |
+| Example override file | [values.env.example.yaml](https://github.com/ConnorsApps/unifi-os-helm/blob/main/values.env.example.yaml) |
+| PostgreSQL: bundled vs external, credentials, **the version 14 ceiling** | [DATABASE.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/DATABASE.md) |
+| TLS: self-signed, existing secret, cert-manager, BackendTLSPolicy | [TLS.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/TLS.md) |
+| What each UniFi service does | [SERVICES.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/SERVICES.md) |
+
+Optional, all off by default:
+
+- `backup`: scheduled backups with [unifi-backup](https://github.com/ConnorsApps/unifi-backup), using a local UniFi OS admin.
+- `unifiExporter`: Prometheus metrics with [unpoller](https://github.com/unpoller/unpoller) (API key, username/password, or an existing secret), plus an optional ServiceMonitor.
+- `unifi.gateway`: Gateway API routes (HTTPS, inform, TCP 8080, UDP discovery/STUN/syslog).
+
+## The image
+
+The [Dockerfile](https://github.com/ConnorsApps/unifi-os-helm/blob/main/Dockerfile) pulls the OCI image out of Ubiquiti's installer and patches it for Kubernetes ([image/](https://github.com/ConnorsApps/unifi-os-helm/tree/main/image)). The installer version is pinned in [uos-version.env](https://github.com/ConnorsApps/unifi-os-helm/blob/main/uos-version.env).
 
 ```bash
-helm repo add unifi-os https://connorsapps.github.io/unifi-os-helm
-helm repo update
-helm upgrade -n unifi --create-namespace unifi unifi-os/unifi-os --install \
-  -f values.env.yaml
+make build          # podman; make help lists the rest
+make verify-image
 ```
-
-## Optional features
-
-The chart includes opt-in support for:
-
-- **Automated backups** via [unifi-backup](https://github.com/ConnorsApps/unifi-backup) — runs as a CronJob using a local UniFi OS admin account.
-- **Prometheus metrics** via [unpoller](https://github.com/unpoller/unpoller) — scrapes UniFi OS and exposes metrics for Prometheus. Three auth options:
-
-  **API key** (recommended, UniFi OS 4+) — generate at Settings > Admins & Users > (your user) > API Key:
-  ```yaml
-  unifiExporter:
-    enabled: true
-    config:
-      apiKey: "your-api-key"
-  ```
-
-  **Username + password** — create a local Viewer user at Settings > Admins & Users > Add Admin > Local Access Only:
-  ```yaml
-  unifiExporter:
-    enabled: true
-    config:
-      username: "metrics"
-      password: "change-me"
-  ```
-
-  **Pre-existing Secret** — secret must contain a `password` key, an `api-key` key, or both; whichever is non-empty is used (api-key takes priority):
-  ```yaml
-  unifiExporter:
-    enabled: true
-    config:
-      username: "metrics"   # required when using password auth
-    existingSecret:
-      name: "my-unifi-exporter-secret"
-      passwordKey: password   # default
-      apiKeyKey: api-key      # default
-  ```
-
-  Additional collection options (all default to `false`):
-
-  | Field | What it collects |
-  |---|---|
-  | `saveEvents` | Client connect/disconnect and network events |
-  | `saveAlarms` | Security and network alarms |
-  | `saveAnomalies` | Detected network anomalies |
-  | `saveIds` | Device ID-to-name label mappings |
-  | `hashPii` | Hash MAC addresses and client names (privacy/compliance) |
-
-- **TLS certificate management** via cert-manager — issues and rotates the certificate used by UniFi's internal nginx, with optional Gateway API `BackendTLSPolicy` for re-encrypted backend traffic. See [TLS.md](TLS.md).
-
-All are disabled by default. See `values.env.example.yaml` and the relevant sections in `values.yaml` to enable them.
 
 ## Legal
 
-This project is **not affiliated with, endorsed by, or sponsored by Ubiquiti Inc.**
-"UniFi" and "UniFi OS" are trademarks of Ubiquiti Inc. This repository is independent
-community work for self-hosting purposes. Use at your own risk. There's some AI ducktape holding this project together.
+Not affiliated with, endorsed by, or sponsored by Ubiquiti Inc. "UniFi" and
+"UniFi OS" are trademarks of Ubiquiti Inc. Independent community work for
+self-hosting; use at your own risk. There's some AI ducktape holding this project together.
