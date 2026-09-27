@@ -1,0 +1,19 @@
+#!/bin/sh
+# Symlinked as psql/createuser/createdb/dropdb/dropuser. Defaults --host/--port
+# from PGHOST/PGPORT, the password from the CNPG superuser pgpass, and --no-password.
+if [ -z "${PGPASSWORD:-}" ] && [ -r /run/secrets/postgres-superuser/pgpass ]; then
+  pw="$(cut -d: -f5 /run/secrets/postgres-superuser/pgpass | head -n1)"
+  [ -n "$pw" ] && export PGPASSWORD="$pw"
+fi
+host="${PGHOST:-}" port="${PGPORT:-}" pwflag=""
+for arg in "$@"; do
+  case "$arg" in
+    -h|--host|--host=*) host="" ;;
+    -p|--port|--port=*) port="" ;;
+    -w|-W|--no-password|--password) pwflag=1 ;;
+  esac
+done
+[ -n "$host" ] && set -- "$@" --host="$host"
+[ -n "$port" ] && set -- "$@" --port="$port"
+[ -n "$pwflag" ] || set -- "$@" --no-password
+exec "/usr/bin/$(basename "$0")" "$@"
