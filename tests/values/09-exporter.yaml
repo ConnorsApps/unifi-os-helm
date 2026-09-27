@@ -1,0 +1,6 @@
+unifiExporter:
+  enabled: true
+  config:
+    apiKey: api-key
+  serviceMonitor:
+    enabled: true

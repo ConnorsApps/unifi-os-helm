@@ -55,7 +55,7 @@ Helm release
 | [Makefile](Makefile) | Build the image (amd64/arm64), check for and apply upgrades, extract configs, dump systemd maps. |
 | [Chart.yaml](charts/unifi-os/Chart.yaml) | Helm chart definition (`appVersion` = UniFi OS version) with subchart dependencies. |
 | [values.yaml](charts/unifi-os/values.yaml) | Primary chart values — StatefulSet, services, secrets, Gateway API routes. |
-| [values.env.example.yaml](values.env-example.yaml) | Environment-specific overrides (registry, passwords, hostnames). |
+| [values.env.example.yaml](values.env.example.yaml) | Environment-specific overrides (registry, passwords, hostnames). |
 | [SERVICES.md](SERVICES.md) | Reference for every UniFi OS service, its role, and dependencies. |
 | [DATABASE.md](DATABASE.md) | PostgreSQL setup — bundled CNPG and external, credential options. |
 | [TLS.md](TLS.md) | TLS certificate options — self-signed, existing secret, cert-manager. |

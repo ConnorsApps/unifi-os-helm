@@ -1,0 +1,10 @@
+global:
+  postgres:
+    connection:
+      host: pg.example.com
+      port: 6432
+  rabbitmq:
+    connection:
+      host: rmq.example.com
+rabbitmq:
+  enabled: false

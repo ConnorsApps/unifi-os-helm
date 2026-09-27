@@ -1,0 +1,9 @@
+# Merged under every scenario. Fake credentials only.
+global:
+  postgres:
+    connection:
+      password: pg-pass
+  rabbitmq:
+    connection:
+      password: rmq-pass
+      erlangCookie: rmq-cookie

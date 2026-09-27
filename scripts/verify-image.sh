@@ -45,7 +45,7 @@ nogrep /etc/default/unifi-core_advanced "host\.docker\.internal"
 has /etc/systemd/system/uos-discovery-client.service.d/no-restart.conf
 has /etc/systemd/system/uos-agent.service.d/no-restart.conf
 has /etc/systemd/system/mongodb.service.d/log-dir.conf
-grepq /etc/nginx/nginx.conf "access_log /dev/stdout apm;"
+grepq /etc/nginx/nginx.conf "^error_log  /dev/stderr notice;"
 
 exe /usr/bin/timedatectl
 exe /usr/bin/timedatectl.real

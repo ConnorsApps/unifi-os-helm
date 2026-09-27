@@ -1,0 +1,26 @@
+unifi:
+  gateway:
+    parentRef:
+      name: gw
+      namespace: gw-ns
+    httpRouteInform:
+      enabled: true
+      hostname: inform.example.com
+      sectionName: http
+    httpRoute:
+      enabled: true
+      hostname: unifi.example.com
+      sectionName: https
+    tcpRoute:
+      enabled: true
+      sectionName: tcp-8080
+    udpRoutes:
+      discovery:
+        enabled: true
+        sectionName: udp-10003
+      stun:
+        enabled: true
+        sectionName: udp-3478
+      syslog:
+        enabled: true
+        sectionName: udp-5514
