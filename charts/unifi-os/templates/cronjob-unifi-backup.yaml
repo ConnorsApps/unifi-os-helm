@@ -1,20 +1,13 @@
-# ------------------------------------------------------------------
-# Backup CronJob — https://github.com/ConnorsApps/unifi-backup
-# ------------------------------------------------------------------
+{{- /* unifi-backup: https://github.com/ConnorsApps/unifi-backup */}}
 {{- if .Values.backup.enabled }}
+{{- $v := .Values.backup }}
+{{- $secret := $v.existingSecret.name | default "unifi-backup-secret" }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: unifi-backup
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "unifi-os.labels" (dict "root" . "component" "unifi-backup") | nindent 4 }}
-  {{- with .Values.commonAnnotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+  {{- include "unifi-os.metadata" (dict "root" . "name" "unifi-backup" "component" "unifi-backup") | nindent 2 }}
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ $v.schedule | quote }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   concurrencyPolicy: Forbid
@@ -25,103 +18,41 @@ spec:
     spec:
       template:
         metadata:
-          labels:
-            {{- include "unifi-os.labels" (dict "root" . "component" "unifi-backup") | nindent 12 }}
+          {{- include "unifi-os.metadata" (dict "root" . "component" "unifi-backup" "labels" $v.podLabels "annotations" $v.podAnnotations) | nindent 10 }}
         spec:
-          {{- with .Values.imagePullSecrets }}
-          imagePullSecrets:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.backup.nodeSelector }}
-          nodeSelector:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.backup.tolerations }}
-          tolerations:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.backup.priorityClassName }}
-          priorityClassName: {{ . }}
-          {{- end }}
-          {{- if .Values.backup.terminationGracePeriodSeconds }}
-          terminationGracePeriodSeconds: {{ .Values.backup.terminationGracePeriodSeconds }}
-          {{- end }}
-          {{- with .Values.backup.topologySpreadConstraints }}
-          topologySpreadConstraints:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.backup.runtimeClassName }}
-          runtimeClassName: {{ . }}
-          {{- end }}
-          {{- with .Values.backup.hostAliases }}
-          hostAliases:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.backup.dnsPolicy }}
-          dnsPolicy: {{ . }}
-          {{- end }}
-          {{- with .Values.backup.dnsConfig }}
-          dnsConfig:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.backup.podSecurityContext }}
-          securityContext:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.backup.resourceClaims }}
-          resourceClaims:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+          {{- include "unifi-os.podSpec" (dict "root" . "values" $v) | nindent 10 }}
           restartPolicy: OnFailure
           containers:
             - name: backup
-              image: "{{ .Values.backup.image.repository }}:{{ .Values.backup.image.tag }}"
-              imagePullPolicy: {{ .Values.backup.image.pullPolicy | quote }}
-              {{- with .Values.backup.securityContext }}
+              image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+              imagePullPolicy: {{ $v.image.pullPolicy | quote }}
+              {{- with $v.securityContext }}
               securityContext:
                 {{- toYaml . | nindent 16 }}
               {{- end }}
-              args:
-                - "-config"
-                - "/config/config.yaml"
+              args: ["-config", "/config/config.yaml"]
               env:
                 - name: UNIFI_PASS
                   valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.backup.existingSecret.name | default "unifi-backup-secret" }}
-                      key: {{ .Values.backup.existingSecret.passwordKey }}
+                    secretKeyRef: {name: {{ $secret }}, key: {{ $v.existingSecret.passwordKey }}}
                 - name: UNIFI_USER
-                  value: {{ .Values.backup.username | quote }}
+                  value: {{ $v.username | quote }}
                 - name: STORAGE_URL
                   valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.backup.existingSecret.name | default "unifi-backup-secret" }}
-                      key: {{ .Values.backup.existingSecret.storageUrlKey }}
-                {{- with .Values.backup.extraEnv }}
+                    secretKeyRef: {name: {{ $secret }}, key: {{ $v.existingSecret.storageUrlKey }}}
+                {{- with $v.extraEnv }}
                 {{- toYaml . | nindent 16 }}
                 {{- end }}
               volumeMounts:
-                - name: config
-                  mountPath: /config
-                  readOnly: true
-                {{- with .Values.backup.extraVolumeMounts }}
+                - {name: config, mountPath: /config, readOnly: true}
+                {{- with $v.extraVolumeMounts }}
                 {{- toYaml . | nindent 16 }}
                 {{- end }}
               resources:
-                requests:
-                  cpu: {{ .Values.backup.resources.requests.cpu | quote }}
-                  memory: {{ .Values.backup.resources.requests.memory | quote }}
-                limits:
-                  memory: {{ .Values.backup.resources.limits.memory | quote }}
-                  {{- if .Values.backup.resources.limits.cpu }}
-                  cpu: {{ .Values.backup.resources.limits.cpu | quote }}
-                  {{- end }}
-                {{- with .Values.backup.resources.claims }}
-                claims:
-                  {{- toYaml . | nindent 18 }}
-                {{- end }}
+                {{- toYaml $v.resources | nindent 16 }}
           volumes:
-            - name: config
-              configMap:
-                name: unifi-backup-config
+            - {name: config, configMap: {name: unifi-backup-config}}
+            {{- with $v.extraVolumes }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
 {{- end }}
