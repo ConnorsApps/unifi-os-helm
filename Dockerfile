@@ -222,14 +222,15 @@ RUN mkdir -p /bundle/rootfs/usr/lib \
 # openable as a real file (e.g. /proc/1/fd/2, PID 1's own pipe) or the
 # pre-start copy is patched, nginx logs stay on disk in nginx.conf.disabled —
 # same as before this patch existed.
+#
+# Consequently only nginx.conf's global error_log is patched: upstream's
+# nginx.conf carries stock `access_log /var/log/nginx/access.log main;`, and the
+# unifi-core `/data/unifi-core/logs/nginx-{access,error}.log` directives exist
+# only in nginx.conf.disabled (verified against 5.1.40).
 RUN set -e \
     && NGINX_CONF=/bundle/rootfs/etc/nginx/nginx.conf \
     && patch-target file "$NGINX_CONF" "nginx.conf log redirection" \
-    && patch-target grep "$NGINX_CONF" '^[[:space:]]*access_log[[:space:]]+/data/unifi-core/logs/nginx-access\.log[[:space:]]+apm;' "nginx access_log -> stdout" \
-    && patch-target grep "$NGINX_CONF" '^[[:space:]]*error_log[[:space:]]+/data/unifi-core/logs/nginx-error\.log;' "nginx server error_log -> stderr" \
     && patch-target grep "$NGINX_CONF" '^[[:space:]]*error_log[[:space:]]+/var/log/nginx/error\.log[[:space:]]+notice;' "nginx global error_log -> stderr" \
-    && sed -E -i 's|^[[:space:]]*access_log[[:space:]]+/data/unifi-core/logs/nginx-access\.log[[:space:]]+apm;|    access_log /dev/stdout apm;|' "$NGINX_CONF" \
-    && sed -E -i 's|^[[:space:]]*error_log[[:space:]]+/data/unifi-core/logs/nginx-error\.log;|    error_log /dev/stderr;|' "$NGINX_CONF" \
     && sed -E -i 's|^[[:space:]]*error_log[[:space:]]+/var/log/nginx/error\.log[[:space:]]+notice;|error_log  /dev/stderr notice;|' "$NGINX_CONF"
 
 # mongodb.service's unit ships with no ExecStartPre to create /var/log/mongodb,
