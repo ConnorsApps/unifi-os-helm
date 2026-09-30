@@ -35,6 +35,11 @@ then pass `--from-file fw-update.json` to both scripts. Read the release notes
 (or ask for them) and flag container/podman changes, new services, database
 changes and new requirements.
 
+The community.ui.com release page is rendered by JavaScript: `WebFetch` returns
+only a loading shell, so don't spend a call on it. Give the user the link and
+say the notes are unread, or ask them to paste the text. The `make diff-upstream`
+package diff (step 3) is the reliable signal for what actually changed.
+
 ## 2. Bump
 
 ```bash
@@ -54,7 +59,10 @@ the subcharts are present, and lists leftover references to the old version
 make diff-upstream                 # committed pin (HEAD) vs bumped working tree; or OLD=<url> NEW=<url>
 ```
 
-Builds the raw `extractor` stage for both installers and writes
+Downloads and extracts both installers (~780 MB each), so run it with a long
+timeout (600000 ms) and expect several minutes. It ends with a per-snapshot
+summary: when everything but `packages.txt` says `unchanged`, no patch or rootfs
+edits are needed (5.1.40 → 5.1.42 was like this). Builds the raw `extractor` stage for both installers and writes
 `file-dumps/upgrade-<old>-<new>/upstream.diff`. Check it against every edit in
 `image/patch.sh` and every file in `image/rootfs/`:
 
@@ -108,6 +116,7 @@ arm64 images can't be boot-tested without an arm64 node: report them as
 
 ## 6. Finish
 
+- Commit locally but don't push: pushing to `main` publishes, so leave that to the user.
 - One commit: `Upgrade to unifi-os X.Y.Z` (version files plus any image/, SERVICES.md or skill-table changes).
 - Merging to `main` publishes the image (amd64, plus arm64 when its URL is pinned) and releases the chart.
   Agent tokens usually can't push `.github/workflows/*`; hand workflow edits to the user.

@@ -3,8 +3,8 @@ name: unifi-os
 description: >-
   UniFi OS Server - self-hosted UniFi management platform
 type: application
-version: 0.10.0
-appVersion: "5.1.40"
+version: 0.10.1
+appVersion: "5.1.42"
 dependencies:
   # RabbitMQ via CloudPirates chart.
   - name: rabbitmq
