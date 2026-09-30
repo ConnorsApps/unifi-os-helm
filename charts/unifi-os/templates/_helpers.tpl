@@ -1,6 +1,3 @@
-{{/*
-Chart name for unifi-os.
-*/}}
 {{- define "unifi-os.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -16,18 +13,11 @@ in a values file is silently ignored otherwise, which is worse than an error.
 {{- end -}}
 {{- end -}}
 
-{{/*
-"helm.sh/chart" label value: <Chart.Name>-<Chart.Version>.
-*/}}
 {{- define "unifi-os.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/*
-Selector labels for a resource/pod template.
-Usage: {{ include "unifi-os.selectorLabels" (dict "root" . "component" "monolith") }}
-"component" is optional — omit or pass "" to skip app.kubernetes.io/component.
-*/}}
+{{/* Selector labels. Params: root, component (optional). Immutable on existing workloads. */}}
 {{- define "unifi-os.selectorLabels" -}}
 {{- $root := .root -}}
 {{- $component := .component | default "" -}}
@@ -38,10 +28,7 @@ app.kubernetes.io/component: {{ $component }}
 {{- end }}
 {{- end -}}
 
-{{/*
-Full set of standard labels for a resource, merged with .Values.commonLabels.
-Usage: {{ include "unifi-os.labels" (dict "root" . "component" "monolith") | nindent 4 }}
-*/}}
+{{/* Standard labels + commonLabels. Params: root, component (optional). */}}
 {{- define "unifi-os.labels" -}}
 {{- $root := .root -}}
 helm.sh/chart: {{ include "unifi-os.chart" $root }}
@@ -54,190 +41,123 @@ app.kubernetes.io/version: {{ $root.Chart.AppVersion | quote }}
 {{- end -}}
 
 {{/*
-Merge <service>.connection with global.<service>.connection.
-Global values win over chart-local values.
-Usage:
-  {{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
+Object or pod-template metadata. Params: root, name (omit for pod templates),
+component, labels (extra), annotations (extra; win over commonAnnotations).
 */}}
-{{- define "unifi-os.mergedConnection" -}}
-{{- $root := .root -}}
-{{- $service := .service -}}
-{{- $global := index $root.Values "global" | default dict -}}
-{{- $globalConnection := index (index $global $service | default dict) "connection" | default dict -}}
-{{- $localService := index $root.Values $service | default dict -}}
-{{- $localConnection := index $localService "connection" | default dict -}}
-{{- toYaml (mergeOverwrite (default dict $localConnection) $globalConnection) -}}
+{{- define "unifi-os.metadata" -}}
+{{- if .name }}
+name: {{ .name }}
+namespace: {{ .root.Release.Namespace }}
+{{- end }}
+labels:
+  {{- include "unifi-os.labels" . | nindent 2 }}
+  {{- with .labels }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- with merge (deepCopy (.annotations | default dict)) (.root.Values.commonAnnotations | default dict) }}
+annotations:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- end -}}
 
 {{/*
-PostgreSQL host — explicit connection.host when set (local or global), else derived from subchart when postgres.enabled.
+Pod spec overrides shared by every workload. Params: root, values (.Values.unifi,
+.Values.unifiExporter or .Values.backup).
 */}}
-{{- define "unifi-os.postgresHost" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- if index $conn "host" -}}
-{{- index $conn "host" -}}
-{{- else if .Values.postgres.enabled -}}
-{{- printf "%s-rw.%s.svc.cluster.local" (.Values.postgres.fullnameOverride | default "unifi-postgres") .Release.Namespace -}}
-{{- else -}}
-{{- "" -}}
+{{- define "unifi-os.podSpec" -}}
+{{- $v := .values -}}
+{{- $spec := dict -}}
+{{- with .root.Values.imagePullSecrets }}{{ $_ := set $spec "imagePullSecrets" . }}{{ end -}}
+{{- with $v.podSecurityContext }}{{ $_ := set $spec "securityContext" . }}{{ end -}}
+{{- range $k := list "serviceAccountName" "nodeSelector" "affinity" "tolerations" "priorityClassName" "terminationGracePeriodSeconds" "topologySpreadConstraints" "runtimeClassName" "hostAliases" "dnsPolicy" "dnsConfig" "resourceClaims" -}}
+{{- with index $v $k }}{{ $_ := set $spec $k . }}{{ end -}}
 {{- end -}}
+{{- with $spec }}{{ toYaml . }}{{ end -}}
 {{- end -}}
 
 {{/*
-RabbitMQ host — explicit connection.host when set (local or global), else derived from subchart when rabbitmq.enabled.
+Resolved PostgreSQL connection, as YAML: include "unifi-os.postgres" . | fromYaml
+global.postgres.connection wins over postgres.connection (umbrella charts).
+The app's PGPASSWORD comes from:
+  useExistingSecrets   → pg-login-<user> (bundled CNPG, secrets created by you)
+  existingSecret.name  → that secret (external PostgreSQL)
+  otherwise (managed)  → unifi-pg-auth, created from connection.password
 */}}
-{{- define "unifi-os.rabbitmqHost" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
-{{- if index $conn "host" -}}
-{{- index $conn "host" -}}
-{{- else if .Values.rabbitmq.enabled -}}
-{{- printf "%s-rabbitmq.%s.svc.cluster.local" .Release.Name .Release.Namespace -}}
-{{- else -}}
-{{- "" -}}
+{{- define "unifi-os.postgres" -}}
+{{- $c := mergeOverwrite (deepCopy (.Values.postgres.connection | default dict)) (deepCopy (dig "postgres" "connection" dict (.Values.global | default dict))) -}}
+{{- $existing := $c.existingSecret | default dict -}}
+{{- $managed := not (or $c.useExistingSecrets $existing.name) -}}
+{{- $host := $c.host -}}
+{{- if and (not $host) .Values.postgres.enabled -}}
+{{- $host = printf "%s-rw.%s.svc.cluster.local" (.Values.postgres.fullnameOverride | default "unifi-postgres") .Release.Namespace -}}
 {{- end -}}
+host: {{ $host | default "" | quote }}
+port: {{ $c.port | quote }}
+database: {{ $c.database | default "unifi-core" | quote }}
+user: {{ $c.user | default "unifi-core" | quote }}
+useExistingSecrets: {{ $c.useExistingSecrets | default false }}
+managed: {{ $managed }}
+{{- if $c.useExistingSecrets }}
+secretName: {{ printf "pg-login-%s" ($c.user | default "unifi-core") | quote }}
+passwordKey: password
+{{- else if $existing.name }}
+secretName: {{ $existing.name | quote }}
+passwordKey: {{ $existing.passwordKey | default "password" | quote }}
+{{- else }}
+secretName: unifi-pg-auth
+passwordKey: password
+{{- end }}
+{{- if $managed }}
+password: {{ $c.password | required "global.postgres.connection.password is required (or set global.postgres.connection.useExistingSecrets: true)" | quote }}
+{{- else }}
+password: {{ $c.password | default "" | quote }}
+{{- end }}
 {{- end -}}
 
 {{/*
-PostgreSQL connection values from merged config (global defaults; override via postgres.connection).
+Resolved RabbitMQ connection, as YAML: include "unifi-os.rabbitmq" . | fromYaml
+global.rabbitmq.connection wins over rabbitmq.connection. The chart creates
+rabbitmq-auth (managed) unless connection.existingSecret.name is set.
 */}}
-{{- define "unifi-os.postgresPort" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- index $conn "port" -}}
+{{- define "unifi-os.rabbitmq" -}}
+{{- $c := mergeOverwrite (deepCopy (.Values.rabbitmq.connection | default dict)) (deepCopy (dig "rabbitmq" "connection" dict (.Values.global | default dict))) -}}
+{{- $existing := $c.existingSecret | default dict -}}
+{{- $host := $c.host -}}
+{{- if and (not $host) .Values.rabbitmq.enabled -}}
+{{- $host = printf "%s-rabbitmq.%s.svc.cluster.local" .Release.Name .Release.Namespace -}}
 {{- end -}}
-{{- define "unifi-os.postgresDatabase" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- index $conn "database" | default "unifi-core" -}}
-{{- end -}}
-{{- define "unifi-os.postgresUser" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- index $conn "user" | default "unifi-core" -}}
+host: {{ $host | default "" | quote }}
+{{- /* $(RABBITMQ_PASSWORD) is expanded by Kubernetes from the container env. */}}
+uri: {{ $c.uri | default (printf "amqp://%s:$(RABBITMQ_PASSWORD)@%s:%v/" $c.username $host ($c.port | default 5672)) | quote }}
+managed: {{ not $existing.name }}
+{{- if $existing.name }}
+secretName: {{ $existing.name | quote }}
+passwordKey: {{ $existing.passwordKey | default "password" | quote }}
+{{- else }}
+secretName: rabbitmq-auth
+passwordKey: password
+password: {{ $c.password | required "global.rabbitmq.connection.password is required (set password or connection.existingSecret.name to use an existing secret)" | quote }}
+erlangCookie: {{ $c.erlangCookie | required "global.rabbitmq.connection.erlangCookie is required (set erlangCookie or connection.existingSecret.name to use an existing secret)" | quote }}
+{{- end }}
 {{- end -}}
 
-{{/*
-PostgreSQL password for creating unifi-pg-auth (plaintext mode only).
-*/}}
-{{- define "unifi-os.postgresPassword" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- if index $conn "useExistingSecrets" -}}
-{{- "" -}}
-{{- else -}}
-{{- index $conn "password" | required "global.postgres.connection.password is required (or set global.postgres.connection.useExistingSecrets: true)" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Whether chart-managed credential secrets should be skipped.
-True when postgres.useExistingSecrets is true or existingSecret.name is set.
-Controls: unifi-pg-auth creation and init container mode.
-*/}}
-{{- define "unifi-os.rabbitmqUseExistingSecret" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
-{{- if index (index $conn "existingSecret" | default dict) "name" -}}
-true
-{{- end -}}
-{{- end -}}
-{{- define "unifi-os.postgresUseExistingSecret" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- if or (index $conn "useExistingSecrets") (index (index $conn "existingSecret" | default dict) "name") -}}
-true
-{{- end -}}
-{{- end -}}
-
-{{/*
-Secret name for PostgreSQL app PGPASSWORD (secretKeyRef in the UniFi pod).
-  postgres.useExistingSecrets true → pg-login-<connection.user> (e.g. pg-login-unifi-core)
-  existingSecret.name set         → existingSecret.name
-  otherwise                       → unifi-pg-auth (chart-managed)
-*/}}
-{{- define "unifi-os.postgresSecretName" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $conn "useExistingSecrets" -}}
-{{- printf "pg-login-%s" (index $conn "user" | default "unifi-core") -}}
-{{- else if index $existing "name" -}}
-{{- index $existing "name" -}}
-{{- else -}}
-{{- "unifi-pg-auth" -}}
-{{- end -}}
-{{- end -}}
-{{- define "unifi-os.postgresSecretPasswordKey" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "postgres") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $existing "name" -}}
-{{- index $existing "passwordKey" | default "password" -}}
-{{- else -}}
-{{- "password" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Secret ref for RabbitMQ auth — name, passwordKey, erlangCookieKey for secretKeyRef.
-*/}}
-{{- define "unifi-os.rabbitmqSecretName" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $existing "name" -}}
-{{- index $existing "name" -}}
-{{- else -}}
-{{- "rabbitmq-auth" -}}
-{{- end -}}
-{{- end -}}
-{{- define "unifi-os.rabbitmqSecretPasswordKey" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $existing "name" -}}
-{{- index $existing "passwordKey" | default "password" -}}
-{{- else -}}
-{{- "password" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-RabbitMQ password and erlang-cookie from merged connection (for secret creation). Required when not using existingSecret.
-*/}}
-{{- define "unifi-os.rabbitmqPassword" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $existing "name" -}}
-{{- "" -}}
-{{- else -}}
-{{- index $conn "password" | required "global.rabbitmq.connection.password is required (set password or connection.existingSecret.name to use an existing secret)" -}}
-{{- end -}}
-{{- end -}}
-{{- define "unifi-os.rabbitmqErlangCookie" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
-{{- $existing := index $conn "existingSecret" | default dict -}}
-{{- if index $existing "name" -}}
-{{- "" -}}
-{{- else -}}
-{{- index $conn "erlangCookie" | required "global.rabbitmq.connection.erlangCookie is required (set erlangCookie or connection.existingSecret.name to use an existing secret)" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-TLS secret name for UniFi's nginx backend.
-Returns certManager.secretName when certManager is enabled, else existingSecret, else "".
-Used to conditionally enable the tls volume/mount and init container copy step.
-*/}}
-{{- define "unifi-os.unifiTLSSecretName" -}}
-{{- if .Values.unifi.tls.certManager.enabled -}}
-{{- .Values.unifi.tls.certManager.secretName | default "unifi-tls" -}}
-{{- else -}}
-{{- .Values.unifi.tls.existingSecret -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-RabbitMQ URI — uses merged connection (global overrides local). Returns URI string for RABBITMQ_URI env.
-When connection.uri is set, returns it; else builds from host, port, username.
-*/}}
-{{- define "unifi-os.rabbitmqURI" -}}
-{{- $conn := include "unifi-os.mergedConnection" (dict "root" . "service" "rabbitmq") | fromYaml -}}
-{{- if index $conn "uri" -}}
-{{- index $conn "uri" -}}
-{{- else -}}
-{{- $host := include "unifi-os.rabbitmqHost" . -}}
-{{- $port := (index $conn "port" | default 5672) -}}
-{{- printf "amqp://%s:$(RABBITMQ_PASSWORD)@%s:%v/" (index $conn "username") $host $port -}}
-{{- end -}}
+{{/* unifi-os container ports, keyed by the Service that exposes them. */}}
+{{- define "unifi-os.ports" -}}
+unifi:
+  - {name: https, port: 443, protocol: TCP}             # UniFi OS UI/API (nginx)
+  - {name: inform, port: 8080, protocol: TCP}           # device inform
+  - {name: network-app, port: 8443, protocol: TCP}      # Network application UI/API
+  - {name: id-hub, port: 9543, protocol: TCP}           # Identity Hub
+  - {name: site-supervisor, port: 11084, protocol: TCP}
+  - {name: speedtest, port: 6789, protocol: TCP}        # mobile speed test
+  - {name: hotspot-secure, port: 8444, protocol: TCP}   # secure hotspot portal
+  - {name: rtp, port: 5005, protocol: TCP}
+hotspot:
+  - {name: redirect-0, port: 8880, protocol: TCP}       # hotspot portal redirects
+  - {name: redirect-1, port: 8881, protocol: TCP}
+  - {name: redirect-2, port: 8882, protocol: TCP}
+udp:
+  - {name: stun, port: 3478, protocol: UDP}             # adoption, remote management
+  - {name: syslog, port: 5514, protocol: UDP}           # remote syslog
+  - {name: discovery, port: 10003, protocol: UDP}       # device discovery
 {{- end -}}

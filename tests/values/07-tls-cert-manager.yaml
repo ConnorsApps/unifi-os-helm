@@ -1,0 +1,14 @@
+unifi:
+  tls:
+    certManager:
+      enabled: true
+      issuerRef:
+        name: letsencrypt
+    backendTLSPolicy:
+      enabled: true
+      caCertificateRef:
+        name: my-ca
+      hostname: unifi.example.com
+  gateway:
+    httpRoute:
+      hostname: unifi.example.com

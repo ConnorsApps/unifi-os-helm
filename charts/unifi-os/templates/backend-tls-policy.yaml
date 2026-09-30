@@ -1,3 +1,4 @@
+{{- /* Lets a TLS-terminating Gateway re-encrypt to UniFi's nginx (HTTPS-only on 443). */}}
 {{- if .Values.unifi.tls.backendTLSPolicy.enabled }}
 {{- $btp := .Values.unifi.tls.backendTLSPolicy }}
 {{- if not $btp.hostname }}
@@ -6,19 +7,13 @@
 {{- if not (or $btp.wellKnownCACertificates $btp.caCertificateRef.name) }}
 {{- fail "backendTLSPolicy requires either wellKnownCACertificates or caCertificateRef.name" }}
 {{- end }}
----
 apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
-  name: unifi-backend-tls
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "unifi-os.labels" (dict "root" . "component" "") | nindent 4 }}
+  {{- include "unifi-os.metadata" (dict "root" . "name" "unifi-backend-tls") | nindent 2 }}
 spec:
   targetRefs:
-    - group: ""
-      kind: Service
-      name: unifi
+    - {group: "", kind: Service, name: unifi}
   validation:
     {{- if $btp.wellKnownCACertificates }}
     wellKnownCACertificates: {{ $btp.wellKnownCACertificates }}

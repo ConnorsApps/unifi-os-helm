@@ -1,126 +1,72 @@
-# ------------------------------------------------------------------
-# Dependencies — PostgreSQL, RabbitMQ
-#
-# MongoDB runs embedded inside the container (bundled mongod + mongodb.service).
-# No external MongoDB configuration is supported or needed.
-#
-# | Mode     | Subchart | External | What to set |
-# |----------|----------|----------|-------------|
-# | Postgres | postgres.enabled: true | postgres.enabled: false | connection.host |
-# | RabbitMQ | rabbitmq.enabled: true | rabbitmq.enabled: false | connection.host |
-#
-# Bundled postgres (postgres.enabled: true) uses the CloudNativePG cluster subchart.
-# Set connection.password and the chart generates all pg-login-* secrets automatically.
-# Set postgres.useExistingSecrets: true to provide your own pg-login-* secrets instead
-# (e.g. via ESO/Vault) — secret names are fixed and cannot be changed.
-#
-# For external postgres (postgres.enabled: false): set connection.host and either
-# connection.password or connection.existingSecret.
-# global.*.connection overrides chart-local values (umbrella charts).
-# ------------------------------------------------------------------
+# Connections. global.* wins over the chart-local postgres/rabbitmq.connection
+# (umbrella charts). MongoDB is embedded in the image and not configurable.
+# See DATABASE.md for the credential modes.
 global:
   postgres:
     connection:
-      host: ""
+      host: ""                # external PostgreSQL; derived from the subchart when postgres.enabled
       port: 5432
       database: unifi-core
       user: unifi-core
-      # password: plaintext password. Chart creates unifi-pg-auth and pg-login-* secrets.
-      password: ""
-      # useExistingSecrets: when true, chart expects pre-created pg-login-<rolename> secrets
-      #   (e.g. from ESO/Vault). Secret names are fixed — see DATABASE.md for the full list.
-      #   Mutually exclusive with password. Only applies when postgres.enabled: true.
-      useExistingSecrets: false
-      # existingSecret: for external postgres (postgres.enabled: false) only.
-      #   Provides PGPASSWORD to the app via secretKeyRef.
-      existingSecret:
+      password: ""            # chart creates unifi-pg-auth (+ pg-login-<role> when postgres.enabled)
+      useExistingSecrets: false  # postgres.enabled only: you create every pg-login-<role> secret
+      existingSecret:         # external only: secret holding the app's password
         name: ""
         passwordKey: ""
   rabbitmq:
     connection:
-      host: ""
+      host: ""                # external RabbitMQ; derived from the subchart when rabbitmq.enabled
       port: 5672
       username: unifi
-      # Required unless existingSecret.name is set
-      password: ""
+      password: ""            # required unless existingSecret.name is set
       erlangCookie: ""
       existingSecret:
         name: ""
         passwordKey: ""
         erlangCookieKey: ""
-      uri: ""
+      uri: ""                 # overrides the amqp:// URI built from the fields above
 
 image:
-  repository: "ghcr.io/connorsapps/unifi-os"
-  tag: "5.1.40"
+  repository: ghcr.io/connorsapps/unifi-os
+  tag: ""                     # default: chart appVersion
 
-# ------------------------------------------------------------------
-# Chart-wide extensibility — applied across every object this chart renders
-# (not the postgres/rabbitmq subcharts, which have their own values).
-# ------------------------------------------------------------------
-# Extra labels/annotations merged onto every object.
+# Applied to every object/pod this chart renders (not the subcharts).
 commonLabels: {}
 commonAnnotations: {}
-
-# Image pull secrets attached to every pod this chart creates directly
-# (monolith, unifi-exporter, unifi-backup).
 imagePullSecrets: []
 
-# ------------------------------------------------------------------
-# Backup — uses https://github.com/ConnorsApps/unifi-backup
-# Requires a Local UniFi OS user with Administrator role.
-# See https://github.com/ConnorsApps/unifi-backup/blob/main/CONFIGURATION.md
-# ------------------------------------------------------------------
+# Workload overrides. unifi, unifiExporter and backup each accept:
+#   podAnnotations podLabels nodeSelector affinity tolerations priorityClassName
+#   terminationGracePeriodSeconds topologySpreadConstraints runtimeClassName
+#   hostAliases dnsPolicy dnsConfig podSecurityContext securityContext
+#   resourceClaims (DRA; reference them from resources.claims) extraEnv
+#   extraVolumes extraVolumeMounts
+# securityContext is merged over each container's required defaults.
+
+# Scheduled backups via https://github.com/ConnorsApps/unifi-backup (CONFIGURATION.md).
+# Needs a local UniFi OS user with the Administrator role.
 backup:
   enabled: false
-
   schedule: "0 2 * * *"
-
   image:
     repository: ghcr.io/connorsapps/unifi-backup
     tag: latest
     pullPolicy: IfNotPresent
-
-  # Password for the backup UniFi OS local user (Administrator role required).
-  # Set in values.env.yaml. Ignored when existingSecret.name is set.
-  password: ""
-
   username: backup
-
-  # Storage backend URL — kept as a Secret because it often contains credentials.
-  # Injected as STORAGE_URL env var (takes priority over config file).
-  # See https://github.com/ConnorsApps/unifi-backup/blob/main/CONFIGURATION.md
-  # Examples:
-  #   file://./backups
-  #   smb://user:pass@nas.local/share
-  #   s3://my-bucket?region=us-east-1
+  password: ""                # ignored when existingSecret.name is set
+  # Stored in the secret (it often holds credentials): file://./backups,
+  # smb://user:pass@nas.local/share, s3://bucket?region=us-east-1, ...
   storageUrl: "file://./backups"
-
-  resources:
-    requests:
-      cpu: 100m
-      memory: 64Mi
-    limits:
-      memory: 256Mi
-    # DRA claim references for the backup container (see resourceClaims below).
-    claims: []
-
-  # Reference a pre-existing Secret instead of creating one from password/storageUrl above.
-  # Secret must contain the keys specified by *Key fields.
   existingSecret:
     name: ""
     passwordKey: password
     storageUrlKey: storageUrl
-
-  # Non-sensitive backup configuration — rendered as config.yaml in a ConfigMap.
-  # Docs: https://github.com/ConnorsApps/unifi-backup/blob/main/examples/config.example.yaml
-  #       https://github.com/ConnorsApps/unifi-backup/blob/main/CONFIGURATION.md
+  # Rendered as config.yaml; schema:
+  # https://github.com/ConnorsApps/unifi-backup/blob/main/examples/config.example.yaml
   config:
     # yaml-language-server: $schema=https://raw.githubusercontent.com/ConnorsApps/unifi-backup/refs/heads/main/config.schema.json
     unifi:
-      # Leave empty to auto-use the cluster-local service address:
-      # https://unifi.<namespace>.svc.cluster.local
-      url: ""
+      url: ""                 # default: https://unifi.<namespace>.svc.cluster.local
       site: default
       includeDays: 0
       insecure_skip_verify: true
@@ -131,9 +77,15 @@ backup:
       format: json
     retention:
       keepLast: 14
-
-  # CronJob pod scheduling overrides.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  podAnnotations: {}
   nodeSelector: {}
+  affinity: {}
   tolerations: []
   priorityClassName: ""
   terminationGracePeriodSeconds: null
@@ -142,61 +94,49 @@ backup:
   hostAliases: []
   dnsPolicy: ""
   dnsConfig: {}
-  # Merged with the pod's required defaults (currently none).
   podSecurityContext: {}
-  # Merged with the backup container's required defaults (currently none).
   securityContext: {}
-  # Dynamic Resource Allocation (DRA) — claim GPUs/NICs/accelerators for the pod.
   resourceClaims: []
   extraEnv: []
+  extraVolumes: []
   extraVolumeMounts: []
 
-# ------------------------------------------------------------------
-# UniFi Exporter — uses https://github.com/unpoller/unpoller
-# Scrapes metrics from UniFi OS and exposes them for Prometheus.
-# Auth: API key (config.apiKey), username+password (config.username/password),
-# or a pre-existing Secret (existingSecret.name). API key takes priority when non-empty.
-# ------------------------------------------------------------------
+# Prometheus metrics via https://github.com/unpoller/unpoller. Auth, first match wins:
+#   config.apiKey (UniFi OS 4+: Settings > Admins & Users > <user> > API Key)
+#   config.username + config.password (local Viewer user)
+#   existingSecret.name: secret with passwordKey and/or apiKeyKey (config.username
+#   still needed for password auth)
 unifiExporter:
   enabled: false
-
   image:
     repository: ghcr.io/unpoller/unpoller
     tag: "v2.34.0"
     pullPolicy: IfNotPresent
-
   config:
-    # UniFi OS controller URL.
-    # Leave empty to auto-derive: https://unifi.<namespace>.svc.cluster.local
-    url: ""
+    url: ""                   # default: https://unifi.<namespace>.svc.cluster.local
     username: ""
-    # Ignored when existingSecret.name is set.
     password: ""
-    # API key authentication (UniFi OS 4+). Takes precedence over username/password when non-empty.
-    # Ignored when existingSecret.name is set.
     apiKey: ""
     verifyTLS: false
     saveSites: true
     saveDpi: true
-    saveEvents: false
+    saveEvents: false         # client connect/disconnect and network events
     saveAlarms: false
     saveAnomalies: false
-    saveIds: false
-    hashPii: false
+    saveIds: false            # device ID-to-name label mappings
+    hashPii: false            # hash MACs and client names
     reportErrors: true
-
-  # Reference a pre-existing Secret instead of creating one from config.password/apiKey above.
   existingSecret:
     name: ""
     passwordKey: password
     apiKeyKey: api-key
-
   serviceMonitor:
-    # Requires the Prometheus Operator CRDs to be installed.
-    enabled: false
+    enabled: false            # needs the Prometheus Operator CRDs
     interval: 30s
     scrapeTimeout: 10s
-
+  service:
+    type: ClusterIP
+    annotations: {}
   resources:
     requests:
       cpu: 50m
@@ -204,15 +144,10 @@ unifiExporter:
     limits:
       cpu: 200m
       memory: 256Mi
-    # DRA claim references for the exporter container (see resourceClaims below).
-    claims: []
-
-  # Deployment pod customization.
   podAnnotations: {}
   nodeSelector: {}
   affinity: {}
   tolerations: []
-  extraEnv: []
   priorityClassName: ""
   terminationGracePeriodSeconds: null
   topologySpreadConstraints: []
@@ -220,38 +155,27 @@ unifiExporter:
   hostAliases: []
   dnsPolicy: ""
   dnsConfig: {}
-  # Merged with the pod's required defaults (currently none).
   podSecurityContext: {}
-  # Merged with the exporter container's required defaults (currently none).
   securityContext: {}
-  # Dynamic Resource Allocation (DRA) — claim GPUs/NICs/accelerators for the pod.
   resourceClaims: []
+  extraEnv: []
   extraVolumes: []
   extraVolumeMounts: []
-  service:
-    type: ClusterIP
-    annotations: {}
 
-# ------------------------------------------------------------------
-# RabbitMQ
-# ------------------------------------------------------------------
+# RabbitMQ subchart (CloudPirates). It reads the "rabbitmq-auth" secret this chart
+# creates from global.rabbitmq.connection; with connection.existingSecret, point
+# auth.existingSecret/existingPasswordKey/existingErlangCookieKey at your secret.
 rabbitmq:
   enabled: true
-  connection: {} # Optional overrides only; defaults in global.rabbitmq.connection
-  # Prevent fsGroup from adding group-read permissions to the Erlang cookie file.
-  # RabbitMQ / Erlang requires .erlang.cookie to be mode 0400 (owner-only).
+  connection: {}
+  # Keep .erlang.cookie at 0400: fsGroup must not add group-read.
   podSecurityContext:
     fsGroup: 999
     fsGroupChangePolicy: OnRootMismatch
-  # When global.rabbitmq.connection.password is set, this chart creates "rabbitmq-auth" and the
-  # subchart reads from it. When global.rabbitmq.connection.existingSecret.name is set instead,
-  # "rabbitmq-auth" is NOT created — you must override auth.existingSecret/existingPasswordKey/
-  # existingErlangCookieKey here (or in your values file) to point at your secret.
   auth:
     enabled: true
     username: "unifi"
     existingSecret: "rabbitmq-auth"
-    # CloudPirates RabbitMQ uses existingPasswordKey (not existingSecretPasswordKey).
     existingPasswordKey: password
     existingErlangCookieKey: erlang-cookie
   persistence:
@@ -266,40 +190,15 @@ rabbitmq:
       cpu: 500m
       memory: 1Gi
 
-# ------------------------------------------------------------------
-# PostgreSQL — CloudNativePG subchart
-#
-# Two credential modes for bundled CNPG (postgres.enabled: true):
-#
-#   useExistingSecrets: false (default)
-#     Set global.postgres.connection.password. The chart generates pg-login-<rolename>
-#     secrets and unifi-pg-auth automatically.
-#
-#   useExistingSecrets: true
-#     Create pg-login-<rolename> secrets yourself before installing (e.g. via ESO/Vault).
-#     Secret names are fixed — pg-login-unifi-core, pg-login-ulp-go, etc.
-#     Each must be type kubernetes.io/basic-auth with username and password keys.
-#
-# For external postgres (postgres.enabled: false), set connection.host and either
-# connection.password or connection.existingSecret.
-# ------------------------------------------------------------------
+# PostgreSQL subchart (CloudNativePG cluster; needs the CNPG operator).
 postgres:
   enabled: false
-  connection: {} # Optional overrides only; defaults in global.postgres.connection
+  connection: {}
   fullnameOverride: unifi-postgres
   cluster:
     instances: 1
-    # PostgreSQL 14 is a hard ceiling, not a default to bump.
-    # UniFi's ulp-go (the login provider) emits SQL of the form "... = $1AND ...".
-    # PostgreSQL >=15 rejects a placeholder immediately followed by an identifier
-    # ("trailing junk after parameter", commit 2549f0661), so ulp-go fails in
-    # prepareMainEngine, exits 11, and systemd gives up after StartLimitBurst.
-    # unifi-core then proxies /api/auth/login to a dead 127.0.0.1:9080 and the
-    # console shows "Login Unavailable" — see DATABASE.md.
-    #
-    # Raising this again requires restarting ulp-go and confirming it comes back;
-    # a live pg_upgrade alone looks clean because already-open connections survive
-    # (that is exactly how 18-bookworm shipped in 0.9.0 and broke login).
+    # PostgreSQL 14 is a ceiling: ulp-go's SQL ("$1AND") is rejected by 15+,
+    # which breaks login. See DATABASE.md before changing this.
     imageName: "ghcr.io/cloudnative-pg/postgresql:14-bookworm"
     storage:
       size: 10Gi
@@ -309,114 +208,57 @@ postgres:
       owner: unifi-core
       secret:
         name: pg-login-unifi-core
+    # Each role reads its password from pg-login-<name> (fixed names).
     roles:
-      - name: unifi-core
-        ensure: present
-        login: true
-        createdb: true
-        passwordSecret:
-          name: pg-login-unifi-core
-      - name: ulp-go
-        ensure: present
-        login: true
-        createdb: true
-        passwordSecret:
-          name: pg-login-ulp-go
-      - name: uid
-        ensure: present
-        login: true
-        createdb: true
-        passwordSecret:
-          name: pg-login-uid
-      - name: unifi-credential-server
-        ensure: present
-        login: true
-        createdb: true
-        passwordSecret:
-          name: pg-login-unifi-credential-server
-      - name: unifi-directory
-        ensure: present
-        login: true
-        createdb: true
-        passwordSecret:
-          name: pg-login-unifi-directory
-      - name: ucs-agent
-        ensure: present
-        login: true
-        createdb: true
-        passwordSecret:
-          name: pg-login-ucs-agent
-      - name: ucs-update
-        ensure: present
-        login: true
-        createdb: true
-        passwordSecret:
-          name: pg-login-ucs-update
-      - name: unifi-identity-update
-        ensure: present
-        login: true
-        createdb: true
-        passwordSecret:
-          name: pg-login-unifi-identity-update
+      - {name: unifi-core, ensure: present, login: true, createdb: true, passwordSecret: {name: pg-login-unifi-core}}
+      - {name: ulp-go, ensure: present, login: true, createdb: true, passwordSecret: {name: pg-login-ulp-go}}
+      - {name: uid, ensure: present, login: true, createdb: true, passwordSecret: {name: pg-login-uid}}
+      - {name: unifi-credential-server, ensure: present, login: true, createdb: true, passwordSecret: {name: pg-login-unifi-credential-server}}
+      - {name: unifi-directory, ensure: present, login: true, createdb: true, passwordSecret: {name: pg-login-unifi-directory}}
+      - {name: ucs-agent, ensure: present, login: true, createdb: true, passwordSecret: {name: pg-login-ucs-agent}}
+      - {name: ucs-update, ensure: present, login: true, createdb: true, passwordSecret: {name: pg-login-ucs-update}}
+      - {name: unifi-identity-update, ensure: present, login: true, createdb: true, passwordSecret: {name: pg-login-unifi-identity-update}}
   databases:
-    - name: unifi-core
-      owner: unifi-core
-    - name: ulp-go
-      owner: ulp-go
-    - name: uid
-      owner: uid
-    - name: unifi-credential-server
-      owner: unifi-credential-server
-    - name: ucs-user-assets
-      owner: unifi-credential-server
-    - name: unifi-directory
-      owner: unifi-directory
-    - name: ucs-agent
-      owner: ucs-agent
-    - name: unifi-identity-update
-      owner: ucs-update
+    - {name: unifi-core, owner: unifi-core}
+    - {name: ulp-go, owner: ulp-go}
+    - {name: uid, owner: uid}
+    - {name: unifi-credential-server, owner: unifi-credential-server}
+    - {name: ucs-user-assets, owner: unifi-credential-server}
+    - {name: unifi-directory, owner: unifi-directory}
+    - {name: ucs-agent, owner: ucs-agent}
+    - {name: unifi-identity-update, owner: ucs-update}
 
-# ------------------------------------------------------------------
-# UniFi
-# ------------------------------------------------------------------
 unifi:
+  # Hostname or IP devices use to reach the controller (set-inform URL).
+  uosSystemIP: ""
   tls:
-    # Name of an existing kubernetes.io/tls secret to use for UniFi's nginx.
-    # The secret must have tls.crt and tls.key keys; ca.crt is optional.
-    # Ignored when certManager.enabled — the cert-manager secret is used instead.
+    # kubernetes.io/tls secret for UniFi's nginx (tls.crt, tls.key, optional
+    # ca.crt). Empty: self-signed. See TLS.md.
     existingSecret: ""
     certManager:
-      enabled: false
-      # Name of the Secret cert-manager will create. Also used for the volume mount.
+      enabled: false          # overrides existingSecret
       secretName: unifi-tls
       issuerRef:
-        name: ""               # required
-        kind: ClusterIssuer    # or Issuer
+        name: ""              # required
+        kind: ClusterIssuer
         group: cert-manager.io
-      # dnsNames defaults to gateway.httpRoute.hostname when empty.
-      dnsNames: []
-      duration: 2160h          # 90 days
-      renewBefore: 360h        # 15 days
-    # BackendTLSPolicy: generates a Gateway API BackendTLSPolicy so the gateway
-    # re-encrypts traffic to the UniFi backend using the issued cert.
-    backendTLSPolicy:
+      dnsNames: []            # default: [gateway.httpRoute.hostname]
+      duration: 2160h
+      renewBefore: 360h
+    backendTLSPolicy:         # Gateway API: re-encrypt gateway → nginx
       enabled: false
-      # For public CAs (Let's Encrypt etc.): set wellKnownCACertificates: System
-      # For private CAs: leave empty and set caCertificateRef to a ConfigMap with the CA cert.
-      wellKnownCACertificates: ""
+      wellKnownCACertificates: ""  # "System" for public CAs; else caCertificateRef
       caCertificateRef:
-        name: ""     # ConfigMap name containing the CA cert
+        name: ""              # ConfigMap holding the CA
         key: ca.crt
-      # SNI hostname sent to the backend. Required when enabled.
-      hostname: ""
+      hostname: ""            # required; SNI name on the certificate
   resources:
     requests:
       cpu: 500m
       memory: 2Gi
     limits:
       memory: 8Gi
-    # DRA claim references for the unifi-os container (see resourceClaims below).
-    claims: []
+  # PVCs. Fixed at install: a StatefulSet's volumeClaimTemplates cannot change.
   storage:
     statefulset:
       storageClassName: ""
@@ -427,12 +269,7 @@ unifi:
         unifi: 10Gi
         log: 5Gi
         mongodb: 10Gi
-  # Hostname or IP that UniFi devices use to reach the controller for set-inform.
-  # Set this to the externally reachable hostname or IP of the controller service.
-  # Example: "192.168.1.100" or "unifi.example.com"
-  # When empty, devices will not receive a stable inform URL.
-  uosSystemIP: ""
-  # Gateway API route configuration for Istio/Kubernetes Gateway API.
+  # Gateway API routes; each needs a matching listener (sectionName) on parentRef.
   gateway:
     parentRef:
       name: ""
@@ -464,7 +301,18 @@ unifi:
         enabled: false
         sectionName: ""
         backendPort: 5514
-  # StatefulSet pod customization.
+  # Services: unifi (HTTPS + TCP), hotspot (portal redirects), udp (STUN,
+  # syslog, discovery). Each takes type, annotations, externalTrafficPolicy.
+  service:
+    type: ClusterIP
+    annotations: {}
+  hotspotService:
+    type: ClusterIP
+    annotations: {}
+  udpService:
+    type: ClusterIP
+    annotations: {}
+    externalTrafficPolicy: ""  # Local keeps client source IPs (LoadBalancer/NodePort)
   podAnnotations: {}
   podLabels: {}
   nodeSelector: {}
@@ -477,26 +325,14 @@ unifi:
   hostAliases: []
   dnsPolicy: ""
   dnsConfig: {}
-  # Merged with the pod's required defaults (currently none).
   podSecurityContext: {}
-  # Merged on top of the unifi-os container's required defaults
-  # (privileged: true, runAsUser: 0 — needed to run systemd as PID 1).
-  securityContext: {}
-  # Dynamic Resource Allocation (DRA) — claim GPUs/NICs/accelerators for the pod.
-  # e.g. for a DRA-managed NIC to let the pod join the local L2 broadcast
-  # domain for AP discovery without hostNetwork.
-  resourceClaims: []
-  # Extra env vars appended to the unifi-os container.
+  securityContext: {}         # merged over privileged: true, runAsUser: 0 (systemd as PID 1)
+  resourceClaims: []          # e.g. a DRA NIC for L2 device discovery without hostNetwork
   extraEnv: []
-  # Extra volumes/volumeMounts appended to the pod / unifi-os container.
   extraVolumes: []
   extraVolumeMounts: []
-  # Extra init containers appended after the built-in wait-postgres/init containers.
-  extraInitContainers: []
-  # Override the pod's serviceAccountName. Empty uses the namespace's default
-  # ServiceAccount (this chart does not create one).
+  extraInitContainers: []     # run after the built-in init container
   serviceAccountName: ""
-  # Resource requests/limits for the journalctl and discovery-shim sidecar containers.
   journalctl:
     resources:
       requests:
@@ -516,18 +352,3 @@ unifi:
       limits:
         cpu: 100m
         memory: 64Mi
-  # Per-Service overrides. hotspotService/udpService are separate since UDP
-  # ports are commonly exposed a different way than the main TCP service
-  # (e.g. via Gateway API UDPRoute vs. a direct LoadBalancer/NodePort).
-  service:
-    type: ClusterIP
-    annotations: {}
-  hotspotService:
-    type: ClusterIP
-    annotations: {}
-  udpService:
-    type: ClusterIP
-    annotations: {}
-    # externalTrafficPolicy: Local preserves client source IP for STUN/discovery.
-    # Only meaningful when type is NodePort or LoadBalancer.
-    externalTrafficPolicy: ""

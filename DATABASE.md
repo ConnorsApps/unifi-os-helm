@@ -1,105 +1,88 @@
-# PostgreSQL Setup
+# PostgreSQL
 
-UniFi OS requires PostgreSQL **14** — this is a ceiling, not a minimum. See
-[Version ceiling](#version-ceiling) before changing it.
+UniFi OS needs PostgreSQL **14**. That is a ceiling, not a minimum: see
+[Version ceiling](#version-ceiling).
 
-The chart supports two modes:
+| Mode | Use when |
+|---|---|
+| Bundled CNPG (`postgres.enabled: true`) | No PostgreSQL yet |
+| External (`postgres.enabled: false`) | You run PostgreSQL yourself (self-hosted, RDS, …) |
 
-| Mode | When to use |
-|------|-------------|
-| **Bundled CNPG** (`postgres.enabled: true`) | New deployments; no existing PostgreSQL |
-| **External** (`postgres.enabled: false`) | You manage PostgreSQL yourself (self-hosted, RDS, etc.) |
+UniFi uses a role and database per service. Each role's password lives in a
+`kubernetes.io/basic-auth` secret named `pg-login-<role>` (keys `username`,
+`password`; `username` must equal the role):
 
----
+| Role | Owns database(s) |
+|---|---|
+| `unifi-core` | `unifi-core` |
+| `ulp-go` | `ulp-go` |
+| `uid` | `uid` |
+| `unifi-credential-server` | `unifi-credential-server`, `ucs-user-assets` |
+| `unifi-directory` | `unifi-directory` |
+| `ucs-agent` | `ucs-agent` |
+| `ucs-update` | `unifi-identity-update` |
+| `unifi-identity-update` | none (the service logs in to `unifi-identity-update`) |
 
 ## Version ceiling
 
-**Do not run this on PostgreSQL 15 or newer.**
-
-UniFi's `ulp-go` (the login provider behind `/api/auth/login`) builds SQL in which a
-bind placeholder is immediately followed by a keyword — `... = $1AND ...`. PostgreSQL
-accepted that through 14; PostgreSQL 15 added the `param_junk` lexer rule
-([commit `2549f0661`](https://www.postgresql.org/docs/15/release-15.html)) and now
-rejects it:
+**Do not use PostgreSQL 15 or newer.** `ulp-go`, the login provider, sends SQL
+with a placeholder followed directly by a keyword (`... = $1AND ...`).
+PostgreSQL 15 rejects it ([release notes](https://www.postgresql.org/docs/15/release-15.html), commit `2549f0661`):
 
 ```
 ERROR:  trailing junk after parameter at or near "$1AND"
 ```
 
-`ulp-go` hits this in `prepareMainEngine` while syncing `schema_migrations`, exits
-with status 11, and systemd stops retrying after `StartLimitBurst=10`. `unifi-core`
-then proxies logins to a dead `127.0.0.1:9080`, returns `401`, and the console shows
-**"Login Unavailable — Please reboot the console or try again later."** Nothing else
-breaks, which makes it easy to misread as an auth problem rather than a database one.
+`ulp-go` then exits 11 in `prepareMainEngine` until systemd gives up
+(`StartLimitBurst=10`). `unifi-core` proxies logins to a dead `127.0.0.1:9080`
+and the console shows **"Login Unavailable"**. Nothing else breaks, so it looks
+like an auth problem.
 
-Two traps when evaluating an upgrade:
+When evaluating an upgrade:
 
-- **A live `pg_upgrade` looks clean.** `ulp-go`'s existing connections keep working, so
-  the console stays up until the next pod restart — possibly days later. Always restart
-  `ulp-go` (or the whole pod) as part of the test.
-- **CloudNativePG's major upgrade is one-way.** There is no in-place downgrade; getting
-  back to 14 means a logical dump from the newer server, stripping constructs that
-  `psql 14` cannot parse (`\restrict` / `\unrestrict` headers, `SET transaction_timeout`),
-  and restoring into a freshly created cluster.
+- **A live `pg_upgrade` looks clean.** Existing `ulp-go` connections keep
+  working until the next restart. Always restart `ulp-go` (or the pod) to test.
+- **CloudNativePG major upgrades are one-way.** Getting back to 14 means a
+  logical dump from the newer server, stripping what `psql 14` can't parse
+  (`\restrict`/`\unrestrict`, `SET transaction_timeout`), and restoring into a
+  new cluster.
 
-The ceiling lifts only when Ubiquiti fixes that SQL. Re-check on each UniFi OS Server
-release; note that PostgreSQL 14 reaches end-of-life in November 2026.
+The ceiling lifts only when Ubiquiti fixes the SQL; recheck each release.
+PostgreSQL 14 reaches end of life in November 2026.
 
 ## Bundled CNPG
 
-Requires the [CloudNativePG operator](https://cloudnative-pg.io/) installed in your cluster first:
+Install the [CloudNativePG operator](https://cloudnative-pg.io/) first:
 
 ```bash
 helm repo add cnpg https://cloudnative-pg.github.io/charts
 helm upgrade --install cnpg cnpg/cloudnative-pg -n cnpg-system --create-namespace
 ```
 
-### Option A — password (chart-managed secrets)
-
-Set a password and the chart creates all credential secrets automatically:
+**Password (chart-managed secrets).** The chart creates every `pg-login-<role>`
+secret, plus `unifi-pg-auth` for the app:
 
 ```yaml
 postgres:
   enabled: true
-
 global:
   postgres:
     connection:
       password: "your-strong-password"
 ```
 
-The chart generates:
-- `pg-login-<rolename>` — one `kubernetes.io/basic-auth` secret per CNPG role (8 total)
-- `unifi-pg-auth` — secret used for the app pod's `PGPASSWORD`
-
-### Option B — useExistingSecrets (bring your own secrets)
-
-Create the `pg-login-*` secrets yourself before installing — for example via ESO, Vault, or SOPS:
+**Your own secrets** (ESO, Vault, SOPS, …). Create all eight `pg-login-<role>`
+secrets in the release namespace before installing. Passwords may differ per
+role:
 
 ```yaml
 postgres:
   enabled: true
-
 global:
   postgres:
     connection:
       useExistingSecrets: true
 ```
-
-**Secret names are fixed.** You must create exactly these 8 secrets in the same namespace:
-
-| Secret name | Role |
-|-------------|------|
-| `pg-login-unifi-core` | `unifi-core` |
-| `pg-login-ulp-go` | `ulp-go` |
-| `pg-login-uid` | `uid` |
-| `pg-login-unifi-credential-server` | `unifi-credential-server` |
-| `pg-login-unifi-directory` | `unifi-directory` |
-| `pg-login-ucs-agent` | `ucs-agent` |
-| `pg-login-ucs-update` | `ucs-update` |
-| `pg-login-unifi-identity-update` | `unifi-identity-update` |
-
-Each must be `type: kubernetes.io/basic-auth` with `username` matching the role name exactly (CNPG requirement) and a `password` key:
 
 ```yaml
 apiVersion: v1
@@ -113,27 +96,11 @@ stringData:
   password: "your-password"
 ```
 
-Roles may have unique passwords. Each service reads its own password from its role's `pg-login-<rolename>` secret at startup; `pg-login-unifi-core` is only used for the app pod's own `PGPASSWORD` and the CNPG readiness check.
-
-### Storage / HA
-
-```yaml
-postgres:
-  enabled: true
-  cluster:
-    storage:
-      size: 20Gi
-      storageClass: "fast-ssd"
-    instances: 3   # 1 primary + 2 replicas
-```
-
----
+**Storage / HA:** `postgres.cluster.storage.size`, `.storageClass`, `postgres.cluster.instances`.
 
 ## External PostgreSQL
 
-### Prerequisites
-
-Create the required roles and databases manually. Run as superuser:
+Create the roles and databases as a superuser:
 
 ```sql
 CREATE ROLE "unifi-core" LOGIN PASSWORD 'your-password';
@@ -155,68 +122,40 @@ CREATE DATABASE "ucs-agent" OWNER "ucs-agent";
 CREATE DATABASE "unifi-identity-update" OWNER "ucs-update";
 ```
 
-### Option A — plaintext password
+Every service connects with the one password below (optionally set per role
+with your own `pg-login-<role>` secrets):
 
 ```yaml
 postgres:
   enabled: false
-
 global:
   postgres:
     connection:
       host: "postgres.example.com"
-      password: "your-password"
+      password: "your-password"      # or:
+      # existingSecret:
+      #   name: pg-credentials
+      #   passwordKey: password
 ```
 
-### Option B — existing K8s secret
-
-```yaml
-postgres:
-  enabled: false
-
-global:
-  postgres:
-    connection:
-      host: "postgres.example.com"
-      existingSecret:
-        name: "pg-credentials"
-        passwordKey: "password"
-```
-
----
-
-## Umbrella chart
-
-When this chart is a subchart, set `global` in the parent values:
-
-```yaml
-global:
-  postgres:
-    connection:
-      host: "shared-postgres.infra.svc.cluster.local"
-      password: "shared-password"
-```
-
----
+In an umbrella chart, set the same `global.postgres.connection` in the parent.
 
 ## Troubleshooting
 
-**`Login Unavailable` in the web UI / `trailing junk after parameter` in the logs:**
-The Postgres server is 15 or newer. See [Version ceiling](#version-ceiling) — `ulp-go`
-cannot start against it. Confirm with:
+**"Login Unavailable" / `trailing junk after parameter`:** the server is
+PostgreSQL 15+. See [Version ceiling](#version-ceiling). Confirm:
+
 ```bash
-kubectl exec -n unifi <pod> -c unifi-os -- systemctl is-active ulp-go
-kubectl exec -n unifi <pod> -c unifi-os -- tail /data/ulp-go/log/db.log
+kubectl exec -n unifi monolith-0 -c unifi-os -- systemctl is-active ulp-go
+kubectl exec -n unifi monolith-0 -c unifi-os -- tail /data/ulp-go/log/db.log
 ```
 
-**Pod stuck in init:**
-The `wait-postgres` init container waits until the postgres host is reachable. Verify the CNPG cluster is ready and `connection.host` resolves.
+**Pod stuck in `Init`:** the `init` container waits until the PostgreSQL host
+accepts TCP connections (`kubectl logs -n unifi monolith-0 -c init`). Check
+that the CNPG cluster is ready or that `connection.host`/`port` resolve.
 
-**CNPG cluster fails to start:**
-With `global.postgres.connection.useExistingSecrets: true`, check that all 8 `pg-login-*` secrets exist in the namespace and each has a `username` field matching the role name exactly.
+**CNPG cluster won't start** with `useExistingSecrets: true`: all eight
+`pg-login-*` secrets must exist, each with `username` equal to the role.
 
-**Services can't connect:**
-The init container writes per-service config at startup. Check its logs:
-```bash
-kubectl logs -n unifi <pod> -c init
-```
+**A service can't connect:** the init container writes each service's DB config
+at startup; check its logs as above.

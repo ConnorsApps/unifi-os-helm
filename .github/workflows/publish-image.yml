@@ -2,25 +2,9 @@ name: Publish Docker Image
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - Dockerfile
-  workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Optional image tag override for manual builds"
-        required: false
-        type: string
-      uos_installer_url:
-        description: "Optional UOS installer URL build arg override"
-        required: false
-        type: string
-
-env:
-  REGISTRY: ghcr.io
-  DEFAULT_IMAGE_TAG: 5.1.40
-  DEFAULT_UOS_INSTALLER_URL: https://fw-download.ubnt.com/data/unifi-os-server/0e7e-linux-x64-5.1.40-149c6209-9218-4925-86d2-227b6b92f94d.40-x64
+    branches: [main]
+    paths: [Dockerfile, "image/**", uos-version.env]
+  workflow_dispatch: {}
 
 jobs:
   build-and-push:
@@ -29,49 +13,34 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
-      - name: Set image metadata
-        id: vars
+      # uos-version.env pins the version and per-arch installers; arm64 builds
+      # only when its installer is pinned.
+      - name: Load uos-version.env
         run: |
-          OWNER_LOWER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          grep -v '^#' uos-version.env >> "$GITHUB_ENV"
+          . ./uos-version.env
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/unifi-os" >> "$GITHUB_ENV"
+          echo "PLATFORMS=linux/amd64${UOS_INSTALLER_URL_ARM64:+,linux/arm64}" >> "$GITHUB_ENV"
 
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            IMAGE_TAG="${{ inputs.image_tag }}"
-          else
-            IMAGE_TAG="${DEFAULT_IMAGE_TAG}"
-          fi
-
-          if [ -n "${{ inputs.uos_installer_url }}" ]; then
-            UOS_INSTALLER_URL="${{ inputs.uos_installer_url }}"
-          else
-            UOS_INSTALLER_URL="${DEFAULT_UOS_INSTALLER_URL}"
-          fi
-
-          echo "image_tag=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
-          echo "uos_installer_url=${UOS_INSTALLER_URL}" >> "${GITHUB_OUTPUT}"
-          echo "image=${REGISTRY}/${OWNER_LOWER}/unifi-os" >> "${GITHUB_OUTPUT}"
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+      - uses: docker/login-action@v4
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - name: Build and push image
-        uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@v7
         with:
           context: .
-          file: ./Dockerfile
           push: true
-          platforms: linux/amd64
-          tags: |
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.image_tag }}
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ env.IMAGE }}:${{ env.UOS_VERSION }}
           build-args: |
-            VERSION=${{ steps.vars.outputs.image_tag }}
-            UOS_INSTALLER_URL=${{ steps.vars.outputs.uos_installer_url }}
+            UOS_INSTALLER_URL_AMD64=${{ env.UOS_INSTALLER_URL_AMD64 }}
+            UOS_INSTALLER_SHA256_AMD64=${{ env.UOS_INSTALLER_SHA256_AMD64 }}
+            UOS_INSTALLER_URL_ARM64=${{ env.UOS_INSTALLER_URL_ARM64 }}
+            UOS_INSTALLER_SHA256_ARM64=${{ env.UOS_INSTALLER_SHA256_ARM64 }}

@@ -1,0 +1,3 @@
+backup:
+  enabled: true
+  password: backup-pass

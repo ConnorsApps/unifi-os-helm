@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Extract live config files from the uosserver container for comparison with the Helm chart.
-# Run via: sudo -u uosserver podman exec -i uosserver bash -s < extract-container-configs.sh
-# Then copy out: sudo -u uosserver podman cp uosserver:/tmp/configs.tar.gz ./configs.tar.gz
+# Collect live config files from an upstream (installer-managed) uosserver
+# podman container, for comparison with this chart. Runs inside the container;
+# `make extract-container-configs` drives it and unpacks file-dumps/configs.
 set -euo pipefail
 
 OUT=/tmp/configs
@@ -20,7 +20,6 @@ for svc in ulp-go unifi-credential-server ucs-user-assets unifi-directory \
   d="/usr/lib/$svc/scripts"
   [ -d "$d" ] && mkdir -p "$OUT/props/$svc" && cp -a "$d" "$OUT/props/$svc/"
 done
-# uid-agent envs.sh is referenced directly in values.yaml container command
 [ -f /usr/lib/uid-agent/scripts/envs.sh ] && cp /usr/lib/uid-agent/scripts/envs.sh "$OUT/props/uid-agent/"
 
 # 3. unifi-core: node-config files + hooks

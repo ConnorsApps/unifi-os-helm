@@ -1,25 +1,6 @@
-UniFi OS Server has been deployed.
-
-{{- $pgHost := include "unifi-os.postgresHost" . | trim }}
-{{- $rmqHost := include "unifi-os.rabbitmqHost" . | trim }}
-
-{{- if not $pgHost }}
-WARNING: PostgreSQL host is not configured. Set global.postgres.connection.host (or postgres.connection.host) when using external PostgreSQL (postgres.enabled=false).
-{{- end }}
-
-{{- if not $rmqHost }}
-WARNING: RabbitMQ host is not configured. Set global.rabbitmq.connection.host (or rabbitmq.connection.host) when using external RabbitMQ (rabbitmq.enabled=false).
-{{- end }}
-
-
-{{- if or $pgHost $rmqHost }}
-
-Configured dependencies:
-  - MongoDB: embedded (localhost, managed by bundled mongodb.service)
-{{- if $pgHost }}
-  - PostgreSQL: {{ $pgHost }}
-{{- end }}
-{{- if $rmqHost }}
-  - RabbitMQ: {{ $rmqHost }}
-{{- end }}
-{{- end }}
+{{- $pg := include "unifi-os.postgres" . | fromYaml -}}
+{{- $mq := include "unifi-os.rabbitmq" . | fromYaml -}}
+UniFi OS Server deployed.
+  PostgreSQL: {{ $pg.host | default "NOT SET: set global.postgres.connection.host (postgres.enabled=false)" }}
+  RabbitMQ:   {{ $mq.host | default "NOT SET: set global.rabbitmq.connection.host (rabbitmq.enabled=false)" }}
+  MongoDB:    embedded (mongodb.service)

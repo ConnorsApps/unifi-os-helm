@@ -1,0 +1,124 @@
+# Every override knob on every workload, plus the optional features.
+commonLabels:
+  team: net
+commonAnnotations:
+  owner: net-team
+imagePullSecrets:
+  - name: regcred
+postgres:
+  enabled: true
+backup:
+  enabled: true
+  password: backup-pass
+  existingSecret:
+    name: backup-creds
+  podAnnotations: &annotations
+    a: "1"
+  nodeSelector: &nodeSelector
+    kubernetes.io/os: linux
+  affinity: &affinity
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - {key: zone, operator: In, values: [a]}
+  tolerations: &tolerations
+    - {key: dedicated, operator: Exists, effect: NoSchedule}
+  priorityClassName: high
+  terminationGracePeriodSeconds: 45
+  topologySpreadConstraints: &tsc
+    - {maxSkew: 1, topologyKey: zone, whenUnsatisfiable: ScheduleAnyway}
+  runtimeClassName: gvisor
+  hostAliases: &hostAliases
+    - {ip: 10.0.0.1, hostnames: [nas.local]}
+  dnsPolicy: None
+  dnsConfig: &dnsConfig
+    nameservers: [1.1.1.1]
+  podSecurityContext: {fsGroup: 1000}
+  securityContext: {readOnlyRootFilesystem: true}
+  resourceClaims: &claims
+    - {name: nic, resourceClaimTemplateName: nic-template}
+  resources:
+    requests: {cpu: 50m, memory: 32Mi}
+    limits: {cpu: 500m, memory: 128Mi}
+    claims: [{name: nic}]
+  extraEnv: [{name: EXTRA, value: "1"}]
+  extraVolumes: [{name: extra, emptyDir: {}}]
+  extraVolumeMounts: [{name: extra, mountPath: /extra}]
+unifiExporter:
+  enabled: true
+  config:
+    username: metrics
+    password: metrics-pass
+  existingSecret:
+    name: exporter-creds
+  serviceMonitor:
+    enabled: true
+  podAnnotations: *annotations
+  nodeSelector: *nodeSelector
+  affinity: *affinity
+  tolerations: *tolerations
+  priorityClassName: high
+  terminationGracePeriodSeconds: 45
+  topologySpreadConstraints: *tsc
+  runtimeClassName: gvisor
+  hostAliases: *hostAliases
+  dnsPolicy: None
+  dnsConfig: *dnsConfig
+  podSecurityContext: {runAsNonRoot: true}
+  securityContext: {readOnlyRootFilesystem: true}
+  resourceClaims: *claims
+  resources:
+    claims: [{name: nic}]
+  extraEnv: [{name: EXTRA, value: "1"}]
+  extraVolumes: [{name: extra, emptyDir: {}}]
+  extraVolumeMounts: [{name: extra, mountPath: /extra}]
+  service:
+    type: NodePort
+    annotations: {svc: exporter}
+unifi:
+  uosSystemIP: unifi.example.com
+  tls:
+    existingSecret: my-tls
+  resources:
+    limits: {cpu: "4", memory: 6Gi}
+    claims: [{name: nic}]
+  storage:
+    statefulset:
+      storageClassName: fast
+      sizes: {persistent: 1Gi, data: 2Gi, srv: 3Gi, unifi: 4Gi, log: 5Gi, mongodb: 6Gi}
+  podAnnotations: *annotations
+  podLabels: {extra: label}
+  nodeSelector: *nodeSelector
+  affinity: *affinity
+  tolerations: *tolerations
+  priorityClassName: high
+  terminationGracePeriodSeconds: 90
+  topologySpreadConstraints: *tsc
+  runtimeClassName: gvisor
+  hostAliases: *hostAliases
+  dnsPolicy: None
+  dnsConfig: *dnsConfig
+  podSecurityContext: {fsGroup: 0}
+  securityContext: {capabilities: {add: [NET_ADMIN]}}
+  resourceClaims: *claims
+  extraEnv: [{name: EXTRA, value: "1"}]
+  extraVolumes: [{name: extra, emptyDir: {}}]
+  extraVolumeMounts: [{name: extra, mountPath: /extra}]
+  extraInitContainers: [{name: hello, image: busybox, command: [true]}]
+  serviceAccountName: unifi
+  journalctl:
+    resources: {requests: {cpu: 1m}}
+  discoveryShim:
+    image: {repository: node, tag: "22-alpine"}
+    resources: {requests: {cpu: 1m}}
+  service:
+    type: LoadBalancer
+    annotations: {svc: unifi}
+  hotspotService:
+    type: NodePort
+    annotations: {svc: hotspot}
+  udpService:
+    type: LoadBalancer
+    annotations: {svc: udp}
+    externalTrafficPolicy: Local

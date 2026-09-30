@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Bump the UniFi OS Server version pinned by this repo.
-#
-# Updates uos-version.env (read by the Makefile and publish-image workflow),
-# Chart.yaml appVersion + chart version, and values.yaml image.tag, then runs
-# the chart checks available locally.
+# Bump the pinned UniFi OS Server release: uos-version.env (read by the
+# Makefile and publish-image workflow) and Chart.yaml appVersion + version
+# (image.tag defaults to appVersion), then run the local chart checks.
 #
 # Usage:
 #   scripts/bump-uos-version.sh --latest                  # query Ubiquiti (scripts/uos-latest.sh)
@@ -20,7 +18,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION_FILE="$ROOT/uos-version.env"
 CHART_FILE="$ROOT/charts/unifi-os/Chart.yaml"
-VALUES_FILE="$ROOT/charts/unifi-os/values.yaml"
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -122,33 +119,23 @@ sed -E \
   -e "s/^appVersion:.*/appVersion: \"$new_version\"/" \
   "$CHART_FILE" > "$CHART_FILE.tmp" && mv "$CHART_FILE.tmp" "$CHART_FILE"
 
-# image.tag: only the first `tag:` directly under the top-level `image:` key.
-awk -v v="$new_version" '
-  /^image:/ { in_image = 1; print; next }
-  in_image && /^[^[:space:]#]/ { in_image = 0 }
-  in_image && !done && /^  tag:/ { print "  tag: \"" v "\""; done = 1; next }
-  { print }
-  END { if (!done) exit 3 }
-' "$VALUES_FILE" > "$VALUES_FILE.tmp" || { rm -f "$VALUES_FILE.tmp"; die "image.tag not found in values.yaml"; }
-mv "$VALUES_FILE.tmp" "$VALUES_FILE"
-
 # --- Check ---------------------------------------------------------------------
 grep -q "^appVersion: \"$new_version\"$" "$CHART_FILE" || die "Chart.yaml appVersion not updated"
-grep -q "^  tag: \"$new_version\"$" "$VALUES_FILE" || die "values.yaml image.tag not updated"
 
 if command -v helm >/dev/null; then
-  lint_out="$(helm lint "$ROOT/charts/unifi-os" 2>&1)" || { printf '%s\n' "$lint_out" >&2; die "helm lint failed"; }
+  lint_out="$(helm lint "$ROOT/charts/unifi-os" -f "$ROOT/tests/values/00-base.yaml" 2>&1)" \
+    || { printf '%s\n' "$lint_out" >&2; die "helm lint failed"; }
   echo "helm lint: ok"
-  if [ -d "$ROOT/.render-test/values" ] && [ -d "$ROOT/charts/unifi-os/charts" ]; then
+  if [ -d "$ROOT/charts/unifi-os/charts" ]; then
     out="$(mktemp -d)"
-    "$ROOT/scripts/test-render-compat.sh" "$out" && echo "render matrix: ok ($out)"
+    "$ROOT/scripts/render-matrix.sh" "$out" && echo "render matrix: ok ($out)"
   fi
 else
   echo "WARN: helm not installed — skipped helm lint" >&2
 fi
 
 stale="$(git -C "$ROOT" grep -n -F "$current_version" -- \
-  ':!uos-version.env' ':!charts/unifi-os/values.yaml' ':!charts/unifi-os/Chart.yaml' \
+  ':!uos-version.env' ':!charts/unifi-os/Chart.yaml' \
   ':!scripts/testdata' ':!.claude/skills' 2>/dev/null | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
 if [ -n "$stale" ] && [ "$current_version" != "$new_version" ]; then
   echo "WARN: $current_version is still referenced — check whether these should change:" >&2
