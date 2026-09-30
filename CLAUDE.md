@@ -14,6 +14,8 @@ make build                 # podman; installer URL + sha256 from uos-version.env
 make build PLATFORMS=linux/arm64 TAG=<v>-arm64   # or make build-all (amd64 + arm64 manifest)
 make verify-image          # static checks on the built image
 make test                  # helm lint + render tests/values/* (needs subcharts: helm dependency update)
+make schema                # regenerate charts/unifi-os/values.schema.json from cmd/schema-gen
+make schema-check          # generator tests + fail if the committed schema is stale
 scripts/render-matrix.sh <out-dir> [chart-dir]    # render the matrix; diff two runs structurally
 ```
 
@@ -32,6 +34,7 @@ the scripts accept `--from-file` with a saved API response.
 | `charts/unifi-os/templates/` | One file per resource group; `_helpers.tpl` holds labels, metadata, podSpec, connection resolution, port table |
 | `charts/unifi-os/files/` | init/start scripts and the discovery shim, inlined via `.Files.Get` |
 | `tests/values/` | Render scenarios, each merged over `00-base.yaml` |
+| `cmd/schema-gen/` | Own Go module: hand-mirrored value types → `charts/unifi-os/values.schema.json` (subchart schemas read from the vendored `charts/*.tgz`) |
 | `scripts/` | Upgrade automation, `verify-image.sh`, `render-matrix.sh`, `extract-container-configs.sh` |
 
 ## Invariants
@@ -43,6 +46,8 @@ the scripts accept `--from-file` with a saved API response.
   their names, order and fields byte-identical, including `storageClassName: ""`.
 - **Values stay backwards compatible**: add keys, don't rename or remove them.
 - **PostgreSQL 14 is a ceiling** (ulp-go SQL breaks on 15+; see DATABASE.md).
+- **The values schema is closed.** Add a key to `values.yaml` and to the matching `cmd/schema-gen/*.go` file, then `make schema`;
+  otherwise `helm lint` rejects it. `make schema-check` must pass.
 - Every patch to an upstream file stays behind `need()`, so an upstream change
   fails the build instead of silently skipping the patch.
 - Before and after template changes, render `tests/values` and diff the output

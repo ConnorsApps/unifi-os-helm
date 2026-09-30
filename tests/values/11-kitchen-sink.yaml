@@ -105,7 +105,7 @@ unifi:
   extraEnv: [{name: EXTRA, value: "1"}]
   extraVolumes: [{name: extra, emptyDir: {}}]
   extraVolumeMounts: [{name: extra, mountPath: /extra}]
-  extraInitContainers: [{name: hello, image: busybox, command: [true]}]
+  extraInitContainers: [{name: hello, image: busybox, command: ["true"]}]
   serviceAccountName: unifi
   journalctl:
     resources: {requests: {cpu: 1m}}

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=values.schema.json
 # Connections. global.* wins over the chart-local postgres/rabbitmq.connection
 # (umbrella charts). MongoDB is embedded in the image and not configurable.
 # See DATABASE.md for the credential modes.

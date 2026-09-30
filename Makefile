@@ -19,7 +19,7 @@ CONFIG_DUMP_DIR ?= file-dumps/configs
 
 BUILD_ARGS = $(foreach v,UOS_INSTALLER_URL_AMD64 UOS_INSTALLER_SHA256_AMD64 UOS_INSTALLER_URL_ARM64 UOS_INSTALLER_SHA256_ARM64 PATCH_STRICT,--build-arg "$(v)=$($(v))")
 
-.PHONY: help build build-all verify-image test latest check-update bump diff-upstream extract-container-configs
+.PHONY: help build build-all verify-image test schema schema-check latest check-update bump diff-upstream extract-container-configs
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-26s %s\n", $$1, $$2}'
@@ -45,6 +45,14 @@ test: ## helm lint + render every tests/values scenario
 	@test -d "$(ROOT_DIR)charts/unifi-os/charts" || helm dependency update "$(ROOT_DIR)charts/unifi-os"
 	helm lint "$(ROOT_DIR)charts/unifi-os" -f "$(ROOT_DIR)tests/values/00-base.yaml"
 	"$(ROOT_DIR)scripts/render-matrix.sh" "$${TMPDIR:-/tmp}/unifi-os-render"
+
+schema: ## Regenerate charts/unifi-os/values.schema.json (needs helm dependency update)
+	@test -d "$(ROOT_DIR)charts/unifi-os/charts" || helm dependency update "$(ROOT_DIR)charts/unifi-os"
+	cd "$(ROOT_DIR)cmd/schema-gen" && go run .
+
+schema-check: ## Run the generator's tests; fail if values.schema.json is stale
+	@test -d "$(ROOT_DIR)charts/unifi-os/charts" || helm dependency update "$(ROOT_DIR)charts/unifi-os"
+	cd "$(ROOT_DIR)cmd/schema-gen" && go vet ./... && go test ./... && go run . -check
 
 latest: ## Show the latest UniFi OS Server release
 	"$(ROOT_DIR)scripts/uos-latest.sh"
