@@ -48,6 +48,8 @@ the scripts accept `--from-file` with a saved API response.
 - **PostgreSQL 14 is a ceiling** (ulp-go SQL breaks on 15+; see DATABASE.md).
 - **The values schema is closed.** Add a key to `values.yaml` and to the matching `cmd/schema-gen/*.go` file, then `make schema`;
   otherwise `helm lint` rejects it. `make schema-check` must pass.
+- `values.yaml`, `values.env.example.yaml` and the README values example start with a
+  `# yaml-language-server: $schema=` comment pointing at the raw `values.schema.json` on `main`.
 - Every patch to an upstream file stays behind `need()`, so an upstream change
   fails the build instead of silently skipping the patch.
 - Before and after template changes, render `tests/values` and diff the output
