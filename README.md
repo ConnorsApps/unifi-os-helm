@@ -60,6 +60,7 @@ helm upgrade --install unifi unifi-os/unifi-os -n unifi --create-namespace -f va
 Minimal credentials (see [DATABASE.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/DATABASE.md) for secret-based options):
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ConnorsApps/unifi-os-helm/main/charts/unifi-os/values.schema.json
 global:
   postgres:
     connection:
