@@ -9,6 +9,7 @@ import corev1 "k8s.io/api/core/v1"
 
 type values struct {
 	Global            global                        `json:"global" description:"Connections shared with umbrella charts"`
+	Enabled           bool                          `json:"enabled" description:"Only for a parent chart that gates this chart with condition: unifi-os.enabled, which puts the key here. The chart itself does not read it."`
 	Image             image                         `json:"image" description:"The UniFi OS image"`
 	NameOverride      string                        `json:"nameOverride" description:"Override the chart name in resource names"`
 	CommonLabels      map[string]string             `json:"commonLabels" description:"Labels on every object this chart renders (not the subcharts)"`

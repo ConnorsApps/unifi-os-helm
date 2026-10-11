@@ -4674,6 +4674,10 @@
         "null"
       ]
     },
+    "enabled": {
+      "description": "Only for a parent chart that gates this chart with condition: unifi-os.enabled, which puts the key here. The chart itself does not read it.",
+      "type": "boolean"
+    },
     "global": {
       "$ref": "#/definitions/Global",
       "description": "Connections shared with umbrella charts"

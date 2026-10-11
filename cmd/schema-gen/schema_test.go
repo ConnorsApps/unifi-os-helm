@@ -113,6 +113,8 @@ func TestValidation(t *testing.T) {
 		"postgres unknown cluster key":     {"postgres: {cluster: {enableSuperuserAccess: true}}", true},
 		"bad role ensure":                  {"postgres: {cluster: {roles: [{name: a, ensure: maybe}]}}", false},
 		"umbrella global key":              {"global: {imageRegistry: example.com}", true},
+		"enabled from a parent condition":  {"enabled: true", true},
+		"enabled must be a boolean":        {"enabled: maybe", false},
 		"numeric password from --set":      {"global: {postgres: {connection: {password: 12345}}}", true},
 		"null grace period":                {"unifi: {terminationGracePeriodSeconds: null}", true},
 		"hull reaches the template":        {"hull: {x: 1}", true},
