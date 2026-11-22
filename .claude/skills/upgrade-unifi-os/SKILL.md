@@ -62,7 +62,7 @@ make diff-upstream                 # committed pin (HEAD) vs bumped working tree
 Downloads and extracts both installers (~780 MB each), so run it with a long
 timeout (600000 ms) and expect several minutes. It ends with a per-snapshot
 summary: when everything but `packages.txt` says `unchanged`, no patch or rootfs
-edits are needed (5.1.40 → 5.1.42 was like this). Builds the raw `extractor` stage for both installers and writes
+edits are needed (5.1.40 → 5.1.42 was like this). Builds the Dockerfile's `snapshot-out` stage for both installers and writes
 `file-dumps/upgrade-<old>-<new>/upstream.diff`. Check it against every edit in
 `image/patch.sh` and every file in `image/rootfs/`:
 
@@ -79,15 +79,13 @@ New services may need a row in `SERVICES.md`.
 ## 4. Build and verify
 
 ```bash
-make build                         # amd64 (PLATFORMS=linux/arm64 TAG=<v>-arm64 for arm64)
-make verify-image                  # every image/rootfs file present, every patch applied
+make build                         # amd64 (PLATFORMS=linux/arm64 TAG=<v>-arm64 for arm64); patch.sh asserts every postcondition
 make build-all                     # optional: amd64 + arm64 manifest (x86 needs qemu-user-static; slow)
-make verify-image TAG=<version>-arm64 PLATFORM=linux/arm64
 ```
 
 `PATCH TARGET MISSING: <what>` means upstream moved that target. Find where it
 went (upstream diff, or `make build PATCH_STRICT=false` and inspect the image),
-then update the edit and its `need()` guard together. `PATCH_STRICT=false` is
+then update the edit, its `need()` guard and its `ensure()` postcondition together. `PATCH_STRICT=false` is
 never the fix.
 
 ## 5. Runtime test
@@ -96,8 +94,8 @@ Deploy to a test namespace (`helm upgrade --install ... --set image.tag=<version
 with the user's `values.env.yaml`) and follow `kubectl logs -f statefulset/monolith -c journalctl`
 until the readiness probe (HTTPS `/` on 443) passes. Match failures against the
 table below. Fix each in `image/patch.sh` (guarded by `need()`, with a comment
-saying why) or as a file in `image/rootfs/`, make sure `scripts/verify-image.sh`
-covers it, and add a row here.
+saying why) or as a file in `image/rootfs/`, add an `ensure()` postcondition next to it
+(`make build` must fail without it), and add a row here.
 
 arm64 images can't be boot-tested without an arm64 node: report them as
 "built, not boot-verified" unless the user confirms.
@@ -120,4 +118,4 @@ arm64 images can't be boot-tested without an arm64 node: report them as
 - One commit: `Upgrade to unifi-os X.Y.Z` (version files plus any image/, SERVICES.md or skill-table changes).
 - Merging to `main` publishes the image (amd64, plus arm64 when its URL is pinned) and releases the chart.
   Agent tokens usually can't push `.github/workflows/*`; hand workflow edits to the user.
-- In the summary, say what was verified (lint / build / verify-image / runtime) and what wasn't.
+- In the summary, say what was verified (lint / build with its patch assertions / runtime) and what wasn't.

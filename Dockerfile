@@ -14,7 +14,17 @@ ARG UOS_INSTALLER_SHA256_ARM64
 COPY image/extract.sh /src/
 RUN sh /src/extract.sh
 
-# Raw upstream ends here (scripts/diff-uos-images.sh builds --target extractor).
+# Raw upstream ends here. Text snapshots of it for scripts/diff-uos-images.sh,
+# which builds --target snapshot-out and exports it (a stage, not a `run`, so it
+# works on buildx-only engines). Both stay above the final stage: the default
+# target, what publish-image.yml builds, is the image.
+FROM extractor AS snapshot
+COPY image/snapshot.sh /src/
+RUN sh /src/snapshot.sh
+
+FROM scratch AS snapshot-out
+COPY --from=snapshot /out /
+
 FROM extractor AS patcher
 ARG TARGETARCH
 ARG PATCH_STRICT=true

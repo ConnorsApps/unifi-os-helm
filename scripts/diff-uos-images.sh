@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Diff two upstream UniFi OS Server releases before patching, to spot changes
 # that break image/patch.sh (renamed units, moved configs, new PostgreSQL
-# major, changed entrypoint/env). Builds the Dockerfile's raw `extractor` stage
-# for each installer, snapshots the parts of the rootfs this repo depends on,
-# and diffs the snapshots.
+# major, changed entrypoint/env). Builds the Dockerfile's `snapshot-out` stage
+# (image/snapshot.sh on the raw `extractor` rootfs) for each installer, which
+# snapshots the parts of the rootfs this repo depends on, and diffs the snapshots.
 #
 # Usage: scripts/diff-uos-images.sh [--old INSTALLER_URL] [--new INSTALLER_URL]
 #   --old  default: installer pinned in the committed (HEAD) uos-version.env
@@ -75,43 +75,19 @@ new_ver="$(version_of "$new_url")"; new_ver="${new_ver:-new}"
 OUT_DIR="${OUT_DIR:-$ROOT/file-dumps/upgrade-$old_ver-$new_ver}"
 mkdir -p "$OUT_DIR"
 
-# Runs inside the extractor image; writes text snapshots to /out.
-# shellcheck disable=SC2016
-DUMP='
-set -eu
-R=/bundle/rootfs
-cd "$R"
-find etc/systemd lib/systemd usr/lib/systemd \( -name "*.service" -o -name "*.target" -o -name "*.timer" -o -name "*.socket" -o -name "*.conf" \) 2>/dev/null | sort > /out/units.txt
-find etc/systemd lib/systemd usr/lib/systemd -type l 2>/dev/null | sort | while read -r l; do echo "$l -> $(readlink "$l")"; done > /out/unit-links.txt
-: > /out/unit-files.txt
-for f in $(grep -E "(unifi|uos|ulp|ubnt|mongo|postgres|rabbit|nginx|epmd|podman|systemd-tim)" /out/units.txt); do
-  [ -f "$f" ] && { echo "===== /$f"; cat "$f"; echo; } >> /out/unit-files.txt
-done
-: > /out/config-files.txt
-for f in etc/default/unifi-core* etc/nginx/nginx.conf* usr/lib/version usr/lib/platform usr/lib/app_model usr/lib/product_name; do
-  [ -f "$f" ] && { echo "===== /$f"; cat "$f"; echo; } >> /out/config-files.txt
-done
-ls -1 usr/lib | sort > /out/usr-lib.txt
-ls -1 usr/lib/postgresql 2>/dev/null > /out/postgresql-majors.txt || : > /out/postgresql-majors.txt
-find usr/bin usr/sbin usr/local/bin -maxdepth 1 ! -type d 2>/dev/null | sort > /out/binaries.txt
-awk "/^Package: /{p=\$2} /^Version: /{print p\" \"\$2}" var/lib/dpkg/status | sort > /out/packages.txt
-jq "{args: .process.args, env: .process.env, cwd: .process.cwd, user: .process.user}" /bundle/config.json > /out/oci-process.json
-'
-
+# The snapshot script is the Dockerfile's `snapshot-out` stage (image/snapshot.sh), so
+# this works on engines without `run` (docker/buildx against a remote buildkitd).
 snapshot() { # <side> <url> <sha>
-  local side="$1" url="$2" sha="$3" tag="localhost/uos-extract:$4"
-  echo "==> [$side] building extractor stage for $url" >&2
-  "$ENGINE" build "$ROOT" --target extractor --platform "$PLATFORM" \
-    --build-arg "UOS_INSTALLER_URL_$ARCH=$url" --build-arg "UOS_INSTALLER_SHA256_$ARCH=$sha" \
-    --tag "$tag" >&2
+  local side="$1" url="$2" sha="$3"
+  echo "==> [$side] snapshotting the upstream rootfs of $url" >&2
   rm -rf "${OUT_DIR:?}/$side"; mkdir -p "$OUT_DIR/$side"
-  local mount="$OUT_DIR/$side:/out"
-  [ "$ENGINE" = podman ] && mount="$mount:Z"  # SELinux relabel; no-op elsewhere
-  "$ENGINE" run --rm --platform "$PLATFORM" -v "$mount" --entrypoint /bin/sh "$tag" -c "$DUMP"
+  "$ENGINE" build "$ROOT" --target snapshot-out --platform "$PLATFORM" \
+    --build-arg "UOS_INSTALLER_URL_$ARCH=$url" --build-arg "UOS_INSTALLER_SHA256_$ARCH=$sha" \
+    --output "type=local,dest=$OUT_DIR/$side" >&2
 }
 
-snapshot old "$old_url" "$old_sha" "$old_ver"
-snapshot new "$new_url" "$new_sha" "$new_ver"
+snapshot old "$old_url" "$old_sha"
+snapshot new "$new_url" "$new_sha"
 
 diff -ru "$OUT_DIR/old" "$OUT_DIR/new" > "$OUT_DIR/upstream.diff" || true
 

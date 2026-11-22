@@ -1,0 +1,5 @@
+# The build needs only the Dockerfile and image/; keep the chart, tests,
+# file-dumps/ and .git out of the build context.
+*
+!Dockerfile
+!image
