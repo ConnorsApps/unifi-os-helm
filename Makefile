@@ -9,9 +9,10 @@ IMAGE ?= ghcr.io/connorsapps/unifi-os
 TAG ?= $(UOS_VERSION)
 PLATFORMS ?= linux/amd64
 PLATFORM ?=
-# podman, or docker with buildx (CONTAINER_ENGINE=docker). Without --load, docker
-# builds stay in the build cache, which is all the verification needs.
-CONTAINER_ENGINE ?= podman
+# podman where it's installed, else docker with buildx (an agent sandbox: a remote
+# buildkitd, no daemon). Without --load, docker builds stay in the build cache,
+# which is all the verification needs.
+CONTAINER_ENGINE ?= $(if $(shell command -v podman 2>/dev/null),podman,docker)
 export CONTAINER_ENGINE
 PATCH_STRICT ?= true
 FROM_FILE ?=
@@ -28,12 +29,13 @@ BUILD_ARGS = $(foreach v,UOS_INSTALLER_URL_AMD64 UOS_INSTALLER_SHA256_AMD64 UOS_
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-26s %s\n", $$1, $$2}'
 
-build: ## Build IMAGE:TAG for PLATFORMS [CONTAINER_ENGINE=podman|docker]; patch.sh asserts the result
+build: ## Build IMAGE:TAG for PLATFORMS [CONTAINER_ENGINE=podman|docker, default podman if installed]; patch.sh asserts the result
 	$(CONTAINER_ENGINE) build "$(ROOT_DIR)" --platform "$(PLATFORMS)" $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)"
 
 # podman: per-arch images joined into a manifest list (arm64 on an x86 host needs
 # qemu-user-static); push with: podman manifest push --all $(IMAGE):$(TAG) docker://$(IMAGE):$(TAG)
-# docker: one multi-platform build.
+# docker: one multi-platform build (a docker-container or remote buildx builder;
+# the default docker driver refuses multi-platform without the containerd store).
 build-all: ## Build amd64 + arm64 (podman: and a manifest list)
 	@test -n "$(UOS_INSTALLER_URL_ARM64)" || { echo "UOS_INSTALLER_URL_ARM64 is empty"; exit 1; }
 ifeq ($(CONTAINER_ENGINE),podman)

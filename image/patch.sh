@@ -58,6 +58,7 @@ nginx_error='^[[:space:]]*error_log[[:space:]]+/var/log/nginx/error\.log[[:space
 need "nginx global error_log" grep -Eq "$nginx_error" "$R/etc/nginx/nginx.conf"
 sed -E -i "s|$nginx_error|error_log  /dev/stderr notice;|" "$R/etc/nginx/nginx.conf"
 ensure "nginx global error_log goes to stderr" matches "$R/etc/nginx/nginx.conf" '^error_log  /dev/stderr notice;'
+ensure "nginx global error_log no longer goes to the log file" lacks "$R/etc/nginx/nginx.conf" "$nginx_error"
 
 # No timesyncd in the image, and unifi-core blocks logins while
 # NTPSynchronized=no; image/rootfs/usr/bin/timedatectl wraps the real one.

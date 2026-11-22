@@ -10,7 +10,7 @@ embedded (UniFi hardcodes it).
 
 ```bash
 make help                  # all targets
-make build                 # podman (CONTAINER_ENGINE=docker for buildx); installer URL + sha256 from uos-version.env; patch.sh asserts the result
+make build                 # podman if installed, else docker + buildx (CONTAINER_ENGINE= overrides); installer URL + sha256 from uos-version.env; patch.sh asserts the result
 make build PLATFORMS=linux/arm64 TAG=<v>-arm64   # or make build-all (amd64 + arm64 manifest)
 make test                  # helm lint + render tests/values/* (needs subcharts: helm dependency update)
 make schema                # regenerate charts/unifi-os/values.schema.json from cmd/schema-gen
@@ -29,8 +29,8 @@ a saved API response.
 
 `scripts/upgrade.sh` owns the upgrade pipeline and its "needs human or agent review" signal. A
 console `repo-upgrade` workflow runs it in a sandbox with the docker CLI + buildx and no podman and
-no `docker run` (`CONTAINER_ENGINE=docker`), so everything that inspects an image is a Dockerfile
-stage (`snapshot-out`), never a `run`. Make collapses exit codes to 2, so status lives in JSON under
+no `docker run` (the Makefile picks docker when podman is missing), so everything that inspects an
+image is a Dockerfile stage (`snapshot-out`), never a `run`. Make collapses exit codes to 2, so status lives in JSON under
 `file-dumps/upgrade/` (repo-relative paths):
 
 - `make upgrade-check` writes `check.json` = `{"update": bool, "from": "<pinned>", "to": "<latest>",
@@ -46,15 +46,21 @@ stage (`snapshot-out`), never a `run`. Make collapses exit codes to 2, so status
   `checks` (`[{name, ok}]`: build, test, schema-check), `report_md` (`file-dumps/upgrade/report.md`),
   `diff` (`file-dumps/upgrade/diff/upstream.diff`; `""` if the snapshot diff failed, which also adds a
   `needs_review` reason).
-- `needs_review` rule (lives only in `upgrade.sh`): any snapshot other than `packages.txt` CHANGED,
-  any reference to the old version left in the tree (`scripts/stale-refs.sh`), any failed check.
-  Empty + `verified: true` means nothing the patches depend on changed.
+- `needs_review` rule (lives only in `upgrade.sh`): no snapshot comparison, any snapshot other than
+  `packages.txt` CHANGED, an installer the previous pin had and the new one lacks (merging would stop
+  publishing that arch) or one without a sha256, any reference to the old version left in the tree
+  (`scripts/stale-refs.sh`), any failed check. Empty + `verified: true` means nothing the patches
+  depend on changed. Snapshot reasons stay listed after a fix: they ask for review, not for a change.
+- `make upgrade-verify` re-derives versions from HEAD vs the tree on every run, so bumping the chart's
+  minor (templates changed) after `make upgrade` is picked up.
 - `report.md` is posted verbatim as a public PR body: versions, chart versions, release date, the
   (unread) release-notes link, the snapshot table and package changes, check results, `needs_review`
-  reasons and "Not verified: runtime boot". Nothing else: no local paths beyond repo-relative ones,
+  reasons and what is not verified (runtime boot; builds other than linux/amd64, which only the
+  publish workflow builds). Nothing else: no local paths beyond repo-relative ones,
   no hostnames, no raw logs (those stay in `file-dumps/upgrade/logs/`).
-- `CHANGELOG.md`: `upgrade` and `upgrade-verify` write or replace a `## <chart version>` section at the
-  top (headings are exactly `## X.Y.Z`; a parser windows by them). Don't hand-edit those sections.
+- `CHANGELOG.md`: `upgrade` and `upgrade-verify` write the `## <chart version>` section at the top,
+  replacing any section above HEAD's chart version (an earlier run's, maybe under another version).
+  Headings are exactly `## X.Y.Z`; a parser windows by them. Don't hand-edit those sections.
 
 ## Layout
 

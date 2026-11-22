@@ -9,15 +9,15 @@
 #   --old  default: installer pinned in the committed (HEAD) uos-version.env
 #   --new  default: working-tree uos-version.env if it differs from HEAD (i.e.
 #          after bump-uos-version.sh), else the latest release
-#   URLs matching a pin reuse its sha256.
+#   A URL that a pin names builds with that pin's installer args, sha256 included.
 #
-# Env: CONTAINER_ENGINE (podman), PLATFORM (linux/amd64),
+# Env: CONTAINER_ENGINE (podman if installed, else docker), PLATFORM (linux/amd64),
 #      OUT_DIR (file-dumps/upgrade-<old>-<new>)
 # Output: $OUT_DIR/{old,new}/*.txt, $OUT_DIR/upstream.diff, summary on stdout.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENGINE="${CONTAINER_ENGINE:-podman}"
+ENGINE="${CONTAINER_ENGINE:-$(command -v podman >/dev/null && echo podman || echo docker)}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 ARCH="$(printf '%s' "${PLATFORM#*/}" | tr '[:lower:]' '[:upper:]')"  # AMD64 | ARM64
 
@@ -55,18 +55,22 @@ if [ -z "$new_url" ]; then
   fi
 fi
 
-# sha256_for <url> — checksum from any known pin (HEAD, working tree, latest)
-sha256_for() {
-  local src
+# pin_args <url> — build args, one per line, from the known pin (HEAD, working
+# tree, latest) naming url: all four installer keys, as `make build` passes them,
+# so the new side's extractor stage is the build's cache, not a second download.
+pin_args() {
+  local src k
   for src in "$pinned_head" "$pinned_tree" "$latest"; do
     [ -n "$src" ] || continue
     if [ "$(printf '%s\n' "$src" | kv "UOS_INSTALLER_URL_$ARCH")" = "$1" ]; then
-      printf '%s\n' "$src" | kv "UOS_INSTALLER_SHA256_$ARCH"; return
+      for k in UOS_INSTALLER_URL_AMD64 UOS_INSTALLER_SHA256_AMD64 UOS_INSTALLER_URL_ARM64 UOS_INSTALLER_SHA256_ARM64; do
+        printf '%s\n' --build-arg "$k=$(printf '%s\n' "$src" | kv "$k")"
+      done
+      return
     fi
   done
+  printf '%s\n' --build-arg "UOS_INSTALLER_URL_$ARCH=$1"  # a URL no pin names: no sha256
 }
-old_sha="$(sha256_for "$old_url")"
-new_sha="$(sha256_for "$new_url")"
 [ -n "$old_url" ] && [ -n "$new_url" ] || { echo "ERROR: missing installer URL(s)" >&2; exit 1; }
 [ "$old_url" != "$new_url" ] || { echo "ERROR: old and new installer are the same ($old_url)" >&2; exit 1; }
 
@@ -77,17 +81,17 @@ mkdir -p "$OUT_DIR"
 
 # The snapshot script is the Dockerfile's `snapshot-out` stage (image/snapshot.sh), so
 # this works on engines without `run` (docker/buildx against a remote buildkitd).
-snapshot() { # <side> <url> <sha>
-  local side="$1" url="$2" sha="$3"
+snapshot() { # <side> <url>
+  local side="$1" url="$2" args=() a
+  while IFS= read -r a; do args+=("$a"); done < <(pin_args "$url")
   echo "==> [$side] snapshotting the upstream rootfs of $url" >&2
   rm -rf "${OUT_DIR:?}/$side"; mkdir -p "$OUT_DIR/$side"
-  "$ENGINE" build "$ROOT" --target snapshot-out --platform "$PLATFORM" \
-    --build-arg "UOS_INSTALLER_URL_$ARCH=$url" --build-arg "UOS_INSTALLER_SHA256_$ARCH=$sha" \
+  "$ENGINE" build "$ROOT" --target snapshot-out --platform "$PLATFORM" "${args[@]}" \
     --output "type=local,dest=$OUT_DIR/$side" >&2
 }
 
-snapshot old "$old_url" "$old_sha"
-snapshot new "$new_url" "$new_sha"
+snapshot old "$old_url"
+snapshot new "$new_url"
 
 diff -ru "$OUT_DIR/old" "$OUT_DIR/new" > "$OUT_DIR/upstream.diff" || true
 

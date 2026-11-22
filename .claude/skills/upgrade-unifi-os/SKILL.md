@@ -29,9 +29,9 @@ what you do here is what that workflow's agent step does. The whole contract
 Run it with a long timeout (600000 ms): it downloads and extracts both
 installers (~780 MB each) and builds the image, several minutes in all.
 
-- `CONTAINER_ENGINE=docker make upgrade` for buildx-only environments (no
-  podman, no `docker run`): every image inspection is a Dockerfile stage, so
-  nothing needs `run`. Without `--load` the built image stays in the build cache.
+- Without podman (buildx-only environments, no `docker run`) the Makefile uses
+  docker: every image inspection is a Dockerfile stage, so nothing needs `run`.
+  Without `--load` the built image stays in the build cache.
 - Ubiquiti's hosts are blocked in default cloud sandboxes
   (`fw-update.ubnt.com`, `fw-download.ubnt.com`, `download.svc.ui.com`,
   `community.ui.com`): allow them, or save the response on a machine with access
@@ -55,8 +55,10 @@ Release lookup details (`scripts/uos-latest.sh --json` prints them):
   depend on changed (5.1.40 → 5.1.42 was like this); the upgrade is the version
   files + changelog.
 - Otherwise each `needs_review` reason is yours to resolve: a changed snapshot
-  (other than `packages.txt`), an old-version reference left in the tree, or a
-  failed check. The raw diff is `diff` (`file-dumps/upgrade/diff/upstream.diff`,
+  (other than `packages.txt`; review it, it stays listed), an old-version
+  reference left in the tree, a failed check, or an installer pin the bump lost
+  or has no sha256 for (upstream hasn't published that arch yet: never invent a
+  pin; the PR waits or ships without that arch on purpose). The raw diff is `diff` (`file-dumps/upgrade/diff/upstream.diff`,
   with `old/` and `new/` snapshots beside it).
 
 Check the diff against every edit in `image/patch.sh` and every file in `image/rootfs/`:
@@ -97,8 +99,9 @@ table below. Fix each in `image/patch.sh` (guarded by `need()`, with a comment
 saying why) or as a file in `image/rootfs/`, add an `ensure()` postcondition next to it
 (`make build` must fail without it), and add a row here.
 
-arm64 images can't be boot-tested without an arm64 node: report them as
-"built, not boot-verified" unless the user confirms.
+`make upgrade` builds linux/amd64 only; `make build PLATFORMS=linux/arm64`
+builds arm64 (qemu on x86). arm64 images can't be boot-tested without an arm64
+node: report them as "built, not boot-verified" unless the user confirms.
 
 ### Known failure signatures
 

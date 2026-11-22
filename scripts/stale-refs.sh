@@ -9,8 +9,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="${1:?usage: stale-refs.sh <version>}"
+# The version as a whole token: v5.1.42 and 5.1.42. match, 15.1.42, 5.1.420 and 5.1.42.1 don't.
+re="(^|[^0-9.])${version//./\\.}([^0-9.]|\\.([^0-9]|\$)|\$)"
 
-git -C "$ROOT" grep -n -w -F "$version" -- \
+git -C "$ROOT" grep -n -E "$re" -- \
   ':!uos-version.env' ':!charts/unifi-os/Chart.yaml' ':!CHANGELOG.md' \
   ':!scripts/testdata' ':!.claude/skills' 2>/dev/null \
   | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' || true

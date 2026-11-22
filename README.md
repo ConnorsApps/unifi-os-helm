@@ -92,7 +92,7 @@ Optional, all off by default:
 The [Dockerfile](https://github.com/ConnorsApps/unifi-os-helm/blob/main/Dockerfile) pulls the OCI image out of Ubiquiti's installer and patches it for Kubernetes ([image/](https://github.com/ConnorsApps/unifi-os-helm/tree/main/image)). The installer version is pinned in [uos-version.env](https://github.com/ConnorsApps/unifi-os-helm/blob/main/uos-version.env).
 
 ```bash
-make build          # podman (CONTAINER_ENGINE=docker for buildx); make help lists the rest
+make build          # podman if installed, else docker + buildx; make help lists the rest
 ```
 
 `image/patch.sh` fails the build when an upstream change makes one of its edits miss or half-apply, so a

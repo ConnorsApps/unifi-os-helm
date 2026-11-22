@@ -22,9 +22,10 @@
 # either way; no report means the run itself failed. CHANGELOG.md gets a
 # "## <chart version>" section from the same data.
 #
-# needs_review (the only place the rule lives): any upstream snapshot other
-# than packages.txt CHANGED, any reference to the old version left in the tree
-# (scripts/stale-refs.sh), any failed check.
+# needs_review (the only place the rule lives): no upstream snapshot comparison,
+# any snapshot other than packages.txt CHANGED, an installer the previous pin had
+# and the new one lacks (or one without a sha256), any reference to the old
+# version left in the tree (scripts/stale-refs.sh), any failed check.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,6 +43,7 @@ CHANGELOG=CHANGELOG.md
 CHECKS=(build test schema-check)
 RELEASE_NOTES_BASE=https://community.ui.com/releases/r/uosserver
 MAX_PKGS=40
+BUILD_PLATFORMS="${PLATFORMS:-linux/amd64}"  # what make build builds (the Makefile's PLATFORMS)
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -128,6 +130,7 @@ write_state() {
   chart_from="$(git show "HEAD:$CHART_FILE" | chart_version)"
   chart_to="$(chart_version < "$CHART_FILE")"
   [ -n "$from" ] && [ -n "$to" ] || die "no UOS_VERSION in $VERSION_FILE"
+  [ -n "$chart_from" ] && [ -n "$chart_to" ] || die "no chart version in $CHART_FILE"
   [ "$from" != "$to" ] || die "already at $to: nothing to upgrade (make upgrade-check says whether a newer release exists)"
   mkdir -p "$OUT"
   jq -n --arg from "$from" --arg to "$to" --arg released "$released" \
@@ -196,6 +199,21 @@ package_changes() {
     }' "$1" | LC_ALL=C sort
 }
 
+# pin_reasons <to>: needs_review lines for installers the bumped pin lost or can't verify
+pin_reasons() {
+  local head_env pair key arch
+  head_env="$(git show "HEAD:$VERSION_FILE")"
+  for pair in AMD64:amd64 ARM64:arm64; do
+    key="${pair%%:*}" arch="${pair#*:}"
+    if [ -z "$(kv "UOS_INSTALLER_URL_$key" < "$VERSION_FILE")" ]; then
+      [ -z "$(printf '%s\n' "$head_env" | kv "UOS_INSTALLER_URL_$key")" ] \
+        || echo "no $arch installer is pinned for $1 (the previous pin had one): merging would stop publishing $arch"
+    elif [ -z "$(kv "UOS_INSTALLER_SHA256_$key" < "$VERSION_FILE")" ]; then
+      echo "the $arch installer for $1 has no sha256 pinned, so the build can't check the download"
+    fi
+  done
+}
+
 # run_check <name>: make <name>, quiet; the log keeps the output
 run_check() {
   local name="$1" log="$OUT/logs/$1.log" rc=0
@@ -216,11 +234,9 @@ cmd_verify() {
   mkdir -p "$OUT/logs"
   rm -f "$OUT/report.json" "$OUT/report.md"
 
-  local tree_to from to released chart_from chart_to
-  tree_to="$(kv UOS_VERSION < "$VERSION_FILE")"
-  if [ ! -f "$STATE" ] || [ "$(jq -r .to "$STATE")" != "$tree_to" ]; then
-    write_state
-  fi
+  # HEAD vs the tree, every time: an agent may have moved the chart version since `run`.
+  write_state
+  local from to released chart_from chart_to
   from="$(jq -r .from "$STATE")"; to="$(jq -r .to "$STATE")"; released="$(jq -r .released "$STATE")"
   chart_from="$(jq -r .chart_from "$STATE")"; chart_to="$(jq -r .chart_to "$STATE")"
   local title="Upgrade to unifi-os $to"
@@ -262,6 +278,7 @@ cmd_verify() {
   if [ -n "$stale_files" ]; then
     review+=("old version $from is still referenced in: ${stale_files// /, }")
   fi
+  while IFS= read -r c; do review+=("$c"); done < <(pin_reasons "$to")
   for c in ${failed[@]+"${failed[@]}"}; do
     review+=("check failed: $c")
   done
@@ -322,7 +339,7 @@ cmd_verify() {
     echo "|---|---|"
     local cj
     for cj in "${checks[@]}"; do
-      jq -r '"| make \(.name) | \(if .ok then "yes" else "no" end) |"' <<<"$cj"
+      jq -r --arg p "$BUILD_PLATFORMS" '"| make \(.name)\(if .name == "build" then " (\($p))" else "" end) | \(if .ok then "yes" else "no" end) |"' <<<"$cj"
     done
     echo
     echo "## Needs review"
@@ -333,7 +350,7 @@ cmd_verify() {
       for c in "${review[@]}"; do echo "- $c"; done
     fi
     echo
-    echo "Not verified: runtime boot"
+    echo "Not verified: runtime boot, and builds for platforms other than $BUILD_PLATFORMS (the publish workflow builds those after merge)."
   } > "$OUT/report.md.tmp"
 
   mv "$OUT/report.md.tmp" "$OUT/report.md"
@@ -350,18 +367,20 @@ cmd_verify() {
   else
     snap_line="changed: $(join_by ', ' "${changed[@]}")"
   fi
-  if [ "$npkgs" -eq 0 ]; then
+  if [ "$have_summary" = false ]; then
+    pkg_line="not compared"
+  elif [ "$npkgs" -eq 0 ]; then
     pkg_line="none"
   else
     pkg_line="$(join_by '; ' "${pkgs[@]:0:8}")"
     [ "$npkgs" -le 8 ] || pkg_line="$pkg_line; and $((npkgs - 8)) more"
   fi
   if [ "$verified" = true ]; then
-    verified_line="yes ($(join_by ', ' "${check_names_ok[@]}")); runtime boot not verified"
+    verified_line="yes ($(join_by ', ' "${check_names_ok[@]}"); built for $BUILD_PLATFORMS); runtime boot not verified"
   else
     verified_line="no (failed: $(join_by ', ' "${failed[@]}"))"
   fi
-  update_changelog "$chart_to" "## $chart_to
+  update_changelog "$chart_from" "$chart_to" "## $chart_to
 
 UniFi OS $from → $to${released:+ (released $released)}.
 
@@ -386,10 +405,12 @@ UniFi OS $from → $to${released:+ (released $released)}.
   [ "$verified" = true ]
 }
 
-# update_changelog <chart version> <section text>: write or replace the section
-# for that version, newest first, below the intro.
+# update_changelog <released chart version> <chart version> <section text>:
+# write the section for <chart version> at the top, below the intro. Sections
+# above the released version (HEAD's) are this upgrade's own, from an earlier
+# run, maybe under another version: they are replaced, not kept.
 update_changelog() {
-  local version="$1" section="$2" tmp
+  local released="$1" version="$2" section="$3" tmp
   if [ ! -f "$CHANGELOG" ]; then
     cat > "$CHANGELOG" <<'EOF'
 # Changelog
@@ -401,19 +422,24 @@ it packages (the image tag is the chart's `appVersion`). `make upgrade` and
 EOF
   fi
   tmp="$(mktemp)"
-  printf '%s\n\n' "$section" > "$tmp.section"
-  awk -v heading="## $version" -v sectionfile="$tmp.section" '
-    function emit(   line) { while ((getline line < sectionfile) > 0) print line; done = 1 }
+  printf '%s\n' "$section" > "$tmp.section"
+  awk -v released="$released" -v version="$version" -v sectionfile="$tmp.section" '
+    function part(v, i,   p) { split(v, p, "."); return p[i] + 0 }
+    function newer(a, b,   i) { # dotted a > b
+      for (i = 1; i <= 3; i++) if (part(a, i) != part(b, i)) return part(a, i) > part(b, i)
+      return 0
+    }
+    function emit(   line) { while ((getline line < sectionfile) > 0) print line; done = 1; gap = 1 }
     /^## / {
       if (!done) emit()
-      skip = ($0 == heading)
+      skip = $2 == version || ($2 ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ && newer($2, released))
     }
     skip { next }
-    { print }
+    { if (gap) { print ""; gap = 0 }; print }
     END { if (!done) emit() }
   ' "$CHANGELOG" > "$tmp"
-  mv "$tmp" "$CHANGELOG"
-  rm -f "$tmp.section"
+  cat "$tmp" > "$CHANGELOG"  # not mv: keep the file's mode
+  rm -f "$tmp" "$tmp.section"
 }
 
 # --- main --------------------------------------------------------------------
