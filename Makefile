@@ -9,9 +9,8 @@ IMAGE ?= ghcr.io/connorsapps/unifi-os
 TAG ?= $(UOS_VERSION)
 PLATFORMS ?= linux/amd64
 PLATFORM ?=
-# podman where it's installed, else docker with buildx (an agent sandbox: a remote
-# buildkitd, no daemon). Without --load, docker builds stay in the build cache,
-# which is all the verification needs.
+# podman if installed, else docker + buildx (e.g. a remote buildkitd, no daemon).
+# Without --load a docker build stays in the build cache, enough to verify it.
 CONTAINER_ENGINE ?= $(if $(shell command -v podman 2>/dev/null),podman,docker)
 export CONTAINER_ENGINE
 PATCH_STRICT ?= true
@@ -29,13 +28,13 @@ BUILD_ARGS = $(foreach v,UOS_INSTALLER_URL_AMD64 UOS_INSTALLER_SHA256_AMD64 UOS_
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-26s %s\n", $$1, $$2}'
 
-build: ## Build IMAGE:TAG for PLATFORMS [CONTAINER_ENGINE=podman|docker, default podman if installed]; patch.sh asserts the result
+build: ## Build IMAGE:TAG for PLATFORMS [CONTAINER_ENGINE=podman|docker]; patch.sh asserts the result
 	$(CONTAINER_ENGINE) build "$(ROOT_DIR)" --platform "$(PLATFORMS)" $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)"
 
-# podman: per-arch images joined into a manifest list (arm64 on an x86 host needs
-# qemu-user-static); push with: podman manifest push --all $(IMAGE):$(TAG) docker://$(IMAGE):$(TAG)
-# docker: one multi-platform build (a docker-container or remote buildx builder;
-# the default docker driver refuses multi-platform without the containerd store).
+# podman: per-arch images in a manifest list (arm64 on x86 needs qemu-user-static);
+#   push: podman manifest push --all $(IMAGE):$(TAG) docker://$(IMAGE):$(TAG)
+# docker: one multi-platform build; needs a docker-container or remote builder
+#   (the default driver refuses multi-platform without the containerd store).
 build-all: ## Build amd64 + arm64 (podman: and a manifest list)
 	@test -n "$(UOS_INSTALLER_URL_ARM64)" || { echo "UOS_INSTALLER_URL_ARM64 is empty"; exit 1; }
 ifeq ($(CONTAINER_ENGINE),podman)
@@ -74,15 +73,14 @@ bump: ## Bump uos-version.env + Chart.yaml to the latest release [FROM_FILE=fw.j
 diff-upstream: ## Diff two upstream installers' rootfs [OLD=<url> NEW=<url>]
 	PLATFORM="$(or $(PLATFORM),linux/amd64)" "$(ROOT_DIR)scripts/diff-uos-images.sh" $(if $(OLD),--old "$(OLD)") $(if $(NEW),--new "$(NEW)")
 
-# The upgrade contract (CLAUDE.md): status is JSON in file-dumps/upgrade/, because make
-# turns every failing exit code into 2. upgrade and upgrade-verify exit 0 iff verified.
+# The upgrade contract is in CLAUDE.md.
 upgrade-check: ## Is a newer release out? Writes file-dumps/upgrade/check.json [FROM_FILE=fw.json]
 	"$(ROOT_DIR)scripts/upgrade.sh" check $(if $(FROM_FILE),--from-file "$(FROM_FILE)")
 
-upgrade: ## Bump, diff upstream, build/test/schema-check; writes report.json, report.md, CHANGELOG.md [FROM_FILE=fw.json]
+upgrade: ## Bump, diff upstream, verify; writes file-dumps/upgrade/report.* and CHANGELOG.md [FROM_FILE=fw.json]
 	"$(ROOT_DIR)scripts/upgrade.sh" run $(if $(FROM_FILE),--from-file "$(FROM_FILE)")
 
-upgrade-verify: ## Re-run build/test/schema-check on the bumped tree and rewrite the report
+upgrade-verify: ## Re-run build/test/schema-check and rewrite the report
 	"$(ROOT_DIR)scripts/upgrade.sh" verify
 
 extract-container-configs: ## Dump configs from a live upstream podman install into file-dumps/configs

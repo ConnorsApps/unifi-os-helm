@@ -1,8 +1,7 @@
 #!/bin/sh
-# Text snapshots of the raw upstream rootfs (/bundle, from the `extractor`
-# stage) for the parts this repo depends on, written to /out. The Dockerfile's
-# `snapshot-out` stage exports them; scripts/diff-uos-images.sh diffs two
-# releases' snapshots to spot changes that break image/patch.sh.
+# Text snapshots of the raw upstream rootfs (/bundle) for the parts this repo
+# depends on, written to /out. The Dockerfile's `snapshot-out` stage exports
+# them; scripts/diff-uos-images.sh diffs two releases' to spot breaking changes.
 set -eu
 R=/bundle/rootfs
 mkdir -p /out

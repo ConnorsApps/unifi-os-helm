@@ -92,14 +92,13 @@ Optional, all off by default:
 The [Dockerfile](https://github.com/ConnorsApps/unifi-os-helm/blob/main/Dockerfile) pulls the OCI image out of Ubiquiti's installer and patches it for Kubernetes ([image/](https://github.com/ConnorsApps/unifi-os-helm/tree/main/image)). The installer version is pinned in [uos-version.env](https://github.com/ConnorsApps/unifi-os-helm/blob/main/uos-version.env).
 
 ```bash
-make build          # podman if installed, else docker + buildx; make help lists the rest
+make build          # podman, else docker + buildx; make help lists the rest
 ```
 
-`image/patch.sh` fails the build when an upstream change makes one of its edits miss or half-apply, so a
-passing `make build` is the verification. `make upgrade-check` reports whether a newer UniFi OS release
-exists; `make upgrade` bumps the pin, diffs the upstream rootfs, builds and tests, and writes a report
-under `file-dumps/upgrade/` (see [CLAUDE.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/CLAUDE.md)).
-Chart and upgrade history: [CHANGELOG.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/CHANGELOG.md).
+`image/patch.sh` fails the build when an upstream change makes an edit miss or half-apply, so a passing
+`make build` is verified. `make upgrade-check` and `make upgrade` look for and apply a newer UniFi OS
+release ([CLAUDE.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/CLAUDE.md)). History:
+[CHANGELOG.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/CHANGELOG.md).
 
 ## Legal
 

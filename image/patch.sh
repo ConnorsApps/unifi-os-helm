@@ -2,17 +2,15 @@
 # Adapt the unpacked upstream rootfs (/bundle/rootfs) for Kubernetes: external
 # PostgreSQL/RabbitMQ, no host services, logs to the container.
 #
-# Static files come from image/rootfs/. The script verifies itself, so a passing
-# build means a verified image: need() guards each edit's precondition and
-# ensure() asserts its postcondition right after, and the end asserts the
-# overlay, version/platform markers and entrypoint. When upstream moves a
-# target the build fails rather than silently skipping or half-applying a patch
-# (PATCH_STRICT=false: warn only). Failure history:
+# Static files come from image/rootfs/. The script verifies itself: need() guards
+# each edit's precondition, ensure() its postcondition, and the end asserts the
+# whole image. When upstream moves a target the build fails rather than skipping
+# or half-applying a patch (PATCH_STRICT=false: warn only). Failure history:
 # .claude/skills/upgrade-unifi-os/SKILL.md.
 set -eu
 R=/bundle/rootfs
 
-gate() { # <label> <hint> <what> <command...>: fail the build unless the command succeeds
+gate() { # <label> <hint> <what> <command...>: fail unless the command succeeds
   label="$1" hint="$2" what="$3"; shift 3
   "$@" && return 0
   echo "$label: $what ($*)" >&2
@@ -109,7 +107,7 @@ cp -a "$(dirname "$0")/rootfs/." "$R/"
 chmod 0755 "$R/usr/bin/timedatectl" "$R/usr/local/bin/pg-wrapper"
 chmod 0440 "$R/etc/sudoers.d/60-unifi-postgres-env"
 
-# Whole-image assertions (the per-edit ones sit next to their edits).
+# Whole-image assertions; per-edit ones sit beside their edits.
 for f in $(cd "$(dirname "$0")/rootfs" && find . ! -type d | sed 's|^\./||' | sort); do
   ensure "image/rootfs/$f is in the image" has "$R/$f"
 done

@@ -149,6 +149,6 @@ UniFi OS $current_version -> $new_version  (chart $old_chart_version -> $chart_v
          sha256=${sha_arm64:-<none>}
   notes: https://community.ui.com/releases/r/uosserver/$new_version
 
-Next: make upgrade-verify, or make build && make test (see .claude/skills/upgrade-unifi-os/SKILL.md)
+Next: make upgrade-verify (see .claude/skills/upgrade-unifi-os/SKILL.md)
 Commit message: Upgrade to unifi-os $new_version
 EOF

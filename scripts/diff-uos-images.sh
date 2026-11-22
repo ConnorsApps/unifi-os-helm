@@ -2,14 +2,13 @@
 # Diff two upstream UniFi OS Server releases before patching, to spot changes
 # that break image/patch.sh (renamed units, moved configs, new PostgreSQL
 # major, changed entrypoint/env). Builds the Dockerfile's `snapshot-out` stage
-# (image/snapshot.sh on the raw `extractor` rootfs) for each installer, which
-# snapshots the parts of the rootfs this repo depends on, and diffs the snapshots.
+# (image/snapshot.sh) for each installer and diffs the snapshots.
 #
 # Usage: scripts/diff-uos-images.sh [--old INSTALLER_URL] [--new INSTALLER_URL]
 #   --old  default: installer pinned in the committed (HEAD) uos-version.env
 #   --new  default: working-tree uos-version.env if it differs from HEAD (i.e.
 #          after bump-uos-version.sh), else the latest release
-#   A URL that a pin names builds with that pin's installer args, sha256 included.
+#   A URL a pin names builds with that pin's args, sha256 included.
 #
 # Env: CONTAINER_ENGINE (podman if installed, else docker), PLATFORM (linux/amd64),
 #      OUT_DIR (file-dumps/upgrade-<old>-<new>)
@@ -55,9 +54,9 @@ if [ -z "$new_url" ]; then
   fi
 fi
 
-# pin_args <url> — build args, one per line, from the known pin (HEAD, working
-# tree, latest) naming url: all four installer keys, as `make build` passes them,
-# so the new side's extractor stage is the build's cache, not a second download.
+# pin_args <url>: --build-arg lines (one per line) from the first pin (HEAD, tree,
+# latest) naming url. All four installer keys, as `make build` passes them, so the
+# extractor stage is shared with the build's cache instead of downloaded again.
 pin_args() {
   local src k
   for src in "$pinned_head" "$pinned_tree" "$latest"; do
@@ -79,8 +78,7 @@ new_ver="$(version_of "$new_url")"; new_ver="${new_ver:-new}"
 OUT_DIR="${OUT_DIR:-$ROOT/file-dumps/upgrade-$old_ver-$new_ver}"
 mkdir -p "$OUT_DIR"
 
-# The snapshot script is the Dockerfile's `snapshot-out` stage (image/snapshot.sh), so
-# this works on engines without `run` (docker/buildx against a remote buildkitd).
+# A Dockerfile stage rather than `run`, so it works on buildx-only engines.
 snapshot() { # <side> <url>
   local side="$1" url="$2" args=() a
   while IFS= read -r a; do args+=("$a"); done < <(pin_args "$url")

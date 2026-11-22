@@ -1,31 +1,14 @@
 #!/usr/bin/env bash
-# The UniFi OS upgrade contract: one owner for "is there an update", "do the
-# upgrade" and "does it need human or agent review". Callers (the make targets,
-# a workflow, an agent) read JSON instead of exit codes, because make collapses
-# every failure to exit 2.
+# The UniFi OS upgrade contract (targets, exit codes, JSON keys, needs_review
+# rules: CLAUDE.md). Callers read JSON under file-dumps/upgrade/, because make
+# collapses every failure to exit 2.
 #
 # Usage (via make upgrade-check | upgrade | upgrade-verify):
-#   scripts/upgrade.sh check  [--from-file FW.json]
-#       writes file-dumps/upgrade/check.json; exit 0 whenever it was written
-#   scripts/upgrade.sh run    [--from-file FW.json]
-#       bump to the latest release, diff upstream (HEAD pin vs bumped tree), verify
-#   scripts/upgrade.sh verify
-#       make build + test + schema-check, then rewrite the report
+#   scripts/upgrade.sh check  [--from-file FW.json]   write check.json
+#   scripts/upgrade.sh run    [--from-file FW.json]   bump, diff upstream, verify
+#   scripts/upgrade.sh verify                         build + test + schema-check, rewrite the report
 #
-# Files in file-dumps/upgrade/ (repo-relative paths in the JSON):
-#   check.json   {update, from, to, title}
-#   report.json  {from, to, chart_from, chart_to, title, brief, needs_review[],
-#                 verified, checks[{name, ok}], report_md, diff}
-#   report.md    public facts only: posted verbatim as a PR body
-#   diff/        upstream snapshots, upstream.diff; diff-summary.txt, state.json, logs/ (local)
-# run and verify exit 0 iff verified (every check passed), and write the report
-# either way; no report means the run itself failed. CHANGELOG.md gets a
-# "## <chart version>" section from the same data.
-#
-# needs_review (the only place the rule lives): no upstream snapshot comparison,
-# any snapshot other than packages.txt CHANGED, an installer the previous pin had
-# and the new one lacks (or one without a sha256), any reference to the old
-# version left in the tree (scripts/stale-refs.sh), any failed check.
+# Local only (not in the PR): diff-summary.txt, state.json, logs/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,7 +26,7 @@ CHANGELOG=CHANGELOG.md
 CHECKS=(build test schema-check)
 RELEASE_NOTES_BASE=https://community.ui.com/releases/r/uosserver
 MAX_PKGS=40
-BUILD_PLATFORMS="${PLATFORMS:-linux/amd64}"  # what make build builds (the Makefile's PLATFORMS)
+BUILD_PLATFORMS="${PLATFORMS:-linux/amd64}"  # the Makefile's PLATFORMS default
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -95,13 +78,13 @@ cmd_check() {
 
 # --- run ---------------------------------------------------------------------
 
-# deps_ok: every chart dependency is vendored (status "ok" in helm dependency list)
+# deps_ok: every chart dependency is vendored (`helm dependency list` says ok)
 deps_ok() {
   helm dependency list "$CHART_DIR" 2>/dev/null \
     | awk -F'\t' 'NF >= 4 && NR > 1 { n++; if ($4 !~ /^ok/) bad = 1 } END { exit (bad || n == 0) ? 1 : 0 }'
 }
 
-# The chart lints against its subcharts, which are gitignored (fresh clones lack them).
+# Lint needs the subcharts, which are gitignored.
 ensure_deps() {
   command -v helm >/dev/null || die "helm is required"
   deps_ok && return 0
@@ -149,7 +132,7 @@ cmd_run() {
     esac
     shift
   done
-  # A missing report must never be a leftover of an earlier run.
+  # No stale outputs: a missing report must mean this run failed.
   rm -rf "$OUT/report.json" "$OUT/report.md" "$STATE" "$SUMMARY" "$DIFF_DIR" "$OUT/logs"
   mkdir -p "$OUT/logs"
 
@@ -163,7 +146,7 @@ cmd_run() {
   write_state
 
   say "diff upstream: committed pin (HEAD) vs bumped tree"
-  # The summary is stdout only; podman/docker progress goes to stderr.
+  # The summary is stdout; engine progress is stderr.
   if ! OUT_DIR="$ROOT/$DIFF_DIR" tee_status "$SUMMARY" scripts/diff-uos-images.sh; then
     echo "WARN: upstream snapshot diff failed; the report will say so" >&2
     rm -f "$SUMMARY"
@@ -207,9 +190,9 @@ pin_reasons() {
     key="${pair%%:*}" arch="${pair#*:}"
     if [ -z "$(kv "UOS_INSTALLER_URL_$key" < "$VERSION_FILE")" ]; then
       [ -z "$(printf '%s\n' "$head_env" | kv "UOS_INSTALLER_URL_$key")" ] \
-        || echo "no $arch installer is pinned for $1 (the previous pin had one): merging would stop publishing $arch"
+        || echo "no $arch installer pinned for $1 (the previous pin had one): merging would stop publishing $arch"
     elif [ -z "$(kv "UOS_INSTALLER_SHA256_$key" < "$VERSION_FILE")" ]; then
-      echo "the $arch installer for $1 has no sha256 pinned, so the build can't check the download"
+      echo "the $arch installer for $1 has no sha256: the build can't verify the download"
     fi
   done
 }
@@ -241,7 +224,7 @@ cmd_verify() {
   chart_from="$(jq -r .chart_from "$STATE")"; chart_to="$(jq -r .chart_to "$STATE")"
   local title="Upgrade to unifi-os $to"
 
-  # Upstream snapshot summary saved by `run`; valid only for this from -> to.
+  # The summary `run` saved; valid only for this from -> to.
   local have_summary=false snaps=() changed=() other_changed=()
   if [ -f "$SUMMARY" ] && grep -q "^UniFi OS upstream diff: $from -> $to\$" "$SUMMARY"; then
     have_summary=true
@@ -256,7 +239,6 @@ cmd_verify() {
     [ "${#snaps[@]}" -gt 0 ] || have_summary=false
   fi
 
-  # Checks
   local checks=() check_names_ok=() failed=() name ok
   for name in "${CHECKS[@]}"; do
     if run_check "$name"; then ok=true; check_names_ok+=("$name"); else ok=false; failed+=("$name"); fi
@@ -265,7 +247,6 @@ cmd_verify() {
   local verified=false
   [ "${#failed[@]}" -gt 0 ] || verified=true
 
-  # needs_review
   local review=() stale_files
   if [ "$have_summary" = false ]; then
     review+=("upstream snapshot comparison is missing: run make upgrade")
@@ -283,7 +264,6 @@ cmd_verify() {
     review+=("check failed: $c")
   done
 
-  # Package changes (compact lines)
   local pkgs=() npkgs=0
   if [ "$have_summary" = true ]; then
     while IFS= read -r line; do pkgs+=("$line"); done < <(package_changes "$SUMMARY")
@@ -293,7 +273,6 @@ cmd_verify() {
   local diff_path=""
   [ ! -f "$DIFF_DIR/upstream.diff" ] || diff_path="$DIFF_DIR/upstream.diff"
 
-  # report.json
   local review_json checks_json
   review_json="$(jq -nc '$ARGS.positional' --args ${review[@]+"${review[@]}"})"
   checks_json="$(printf '%s\n' "${checks[@]}" | jq -sc .)"
@@ -305,7 +284,7 @@ cmd_verify() {
       needs_review: $needs_review, verified: $verified, checks: $checks, report_md: $report_md, diff: $diff}' \
     > "$OUT/report.json.tmp"
 
-  # report.md: posted verbatim as a public PR body. Public facts only.
+  # report.md is posted verbatim as a public PR body: public facts only.
   {
     echo "UniFi OS Server $from → $to${released:+ (released $released)}. Chart $chart_from → $chart_to."
     echo
@@ -356,7 +335,6 @@ cmd_verify() {
   mv "$OUT/report.md.tmp" "$OUT/report.md"
   mv "$OUT/report.json.tmp" "$OUT/report.json"
 
-  # CHANGELOG.md: compact public summary under "## <chart version>"
   local snap_line pkg_line verified_line
   if [ "$have_summary" = false ]; then
     snap_line="not compared"
@@ -388,7 +366,6 @@ UniFi OS $from → $to${released:+ (released $released)}.
 - Package changes: $pkg_line.
 - Verified: $verified_line."
 
-  # Human summary
   echo
   echo "UniFi OS $from -> $to  (chart $chart_from -> $chart_to)"
   local cj
@@ -405,19 +382,18 @@ UniFi OS $from → $to${released:+ (released $released)}.
   [ "$verified" = true ]
 }
 
-# update_changelog <released chart version> <chart version> <section text>:
-# write the section for <chart version> at the top, below the intro. Sections
-# above the released version (HEAD's) are this upgrade's own, from an earlier
-# run, maybe under another version: they are replaced, not kept.
+# update_changelog <HEAD chart version> <chart version> <section>: put the section
+# first, below the intro, replacing every section above HEAD's version (an earlier
+# run's, maybe under another version).
 update_changelog() {
   local released="$1" version="$2" section="$3" tmp
   if [ ! -f "$CHANGELOG" ]; then
     cat > "$CHANGELOG" <<'EOF'
 # Changelog
 
-Chart releases, newest first. Each section names the UniFi OS Server release
-it packages (the image tag is the chart's `appVersion`). `make upgrade` and
-`make upgrade-verify` maintain the entries for upstream upgrades.
+Chart releases, newest first; each names the UniFi OS Server release it
+packages (the chart's `appVersion`, and the image tag). `make upgrade` and
+`make upgrade-verify` write the upstream-upgrade entries.
 
 EOF
   fi
