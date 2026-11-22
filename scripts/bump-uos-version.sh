@@ -134,9 +134,7 @@ else
   echo "WARN: helm not installed — skipped helm lint" >&2
 fi
 
-stale="$(git -C "$ROOT" grep -n -F "$current_version" -- \
-  ':!uos-version.env' ':!charts/unifi-os/Chart.yaml' \
-  ':!scripts/testdata' ':!.claude/skills' 2>/dev/null | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
+stale="$("$ROOT/scripts/stale-refs.sh" "$current_version")"
 if [ -n "$stale" ] && [ "$current_version" != "$new_version" ]; then
   echo "WARN: $current_version is still referenced — check whether these should change:" >&2
   printf '%s\n' "$stale" >&2
@@ -151,6 +149,6 @@ UniFi OS $current_version -> $new_version  (chart $old_chart_version -> $chart_v
          sha256=${sha_arm64:-<none>}
   notes: https://community.ui.com/releases/r/uosserver/$new_version
 
-Next: make build && make verify-image (see .claude/skills/upgrade-unifi-os/SKILL.md)
+Next: make upgrade-verify (see .claude/skills/upgrade-unifi-os/SKILL.md)
 Commit message: Upgrade to unifi-os $new_version
 EOF

@@ -1,0 +1,4 @@
+# Context is the Dockerfile and image/ only (not the chart, file-dumps/ or .git).
+*
+!Dockerfile
+!image

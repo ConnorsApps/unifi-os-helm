@@ -9,6 +9,10 @@ IMAGE ?= ghcr.io/connorsapps/unifi-os
 TAG ?= $(UOS_VERSION)
 PLATFORMS ?= linux/amd64
 PLATFORM ?=
+# podman if installed, else docker + buildx (e.g. a remote buildkitd, no daemon).
+# Without --load a docker build stays in the build cache, enough to verify it.
+CONTAINER_ENGINE ?= $(if $(shell command -v podman 2>/dev/null),podman,docker)
+export CONTAINER_ENGINE
 PATCH_STRICT ?= true
 FROM_FILE ?=
 OLD ?=
@@ -19,27 +23,30 @@ CONFIG_DUMP_DIR ?= file-dumps/configs
 
 BUILD_ARGS = $(foreach v,UOS_INSTALLER_URL_AMD64 UOS_INSTALLER_SHA256_AMD64 UOS_INSTALLER_URL_ARM64 UOS_INSTALLER_SHA256_ARM64 PATCH_STRICT,--build-arg "$(v)=$($(v))")
 
-.PHONY: help build build-all verify-image test schema schema-check latest check-update bump diff-upstream extract-container-configs
+.PHONY: help build build-all test schema schema-check latest check-update bump diff-upstream upgrade-check upgrade upgrade-verify extract-container-configs
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-26s %s\n", $$1, $$2}'
 
-build: ## Build IMAGE:TAG for PLATFORMS with podman
-	podman build "$(ROOT_DIR)" --platform "$(PLATFORMS)" $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)"
+build: ## Build IMAGE:TAG for PLATFORMS [CONTAINER_ENGINE=podman|docker]; patch.sh asserts the result
+	$(CONTAINER_ENGINE) build "$(ROOT_DIR)" --platform "$(PLATFORMS)" $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)"
 
-# arm64 on an x86 host needs qemu-user-static.
-# Push: podman manifest push --all $(IMAGE):$(TAG) docker://$(IMAGE):$(TAG)
-build-all: ## Build amd64 + arm64 and a manifest list
+# podman: per-arch images in a manifest list (arm64 on x86 needs qemu-user-static);
+#   push: podman manifest push --all $(IMAGE):$(TAG) docker://$(IMAGE):$(TAG)
+# docker: one multi-platform build; needs a docker-container or remote builder
+#   (the default driver refuses multi-platform without the containerd store).
+build-all: ## Build amd64 + arm64 (podman: and a manifest list)
 	@test -n "$(UOS_INSTALLER_URL_ARM64)" || { echo "UOS_INSTALLER_URL_ARM64 is empty"; exit 1; }
+ifeq ($(CONTAINER_ENGINE),podman)
 	podman build "$(ROOT_DIR)" --platform linux/amd64 $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)-amd64"
 	podman build "$(ROOT_DIR)" --platform linux/arm64 $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)-arm64"
 	-podman manifest rm "$(IMAGE):$(TAG)" 2>/dev/null
 	podman manifest create "$(IMAGE):$(TAG)"
 	podman manifest add "$(IMAGE):$(TAG)" "containers-storage:$(IMAGE):$(TAG)-amd64"
 	podman manifest add "$(IMAGE):$(TAG)" "containers-storage:$(IMAGE):$(TAG)-arm64"
-
-verify-image: ## Static checks on the built image [PLATFORM=linux/arm64 TAG=<v>-arm64]
-	PLATFORM="$(PLATFORM)" "$(ROOT_DIR)scripts/verify-image.sh" "$(IMAGE):$(TAG)" "$(UOS_VERSION)"
+else
+	$(CONTAINER_ENGINE) build "$(ROOT_DIR)" --platform linux/amd64,linux/arm64 $(BUILD_ARGS) --tag "$(IMAGE):$(TAG)"
+endif
 
 test: ## helm lint + render every tests/values scenario
 	@test -d "$(ROOT_DIR)charts/unifi-os/charts" || helm dependency update "$(ROOT_DIR)charts/unifi-os"
@@ -65,6 +72,16 @@ bump: ## Bump uos-version.env + Chart.yaml to the latest release [FROM_FILE=fw.j
 
 diff-upstream: ## Diff two upstream installers' rootfs [OLD=<url> NEW=<url>]
 	PLATFORM="$(or $(PLATFORM),linux/amd64)" "$(ROOT_DIR)scripts/diff-uos-images.sh" $(if $(OLD),--old "$(OLD)") $(if $(NEW),--new "$(NEW)")
+
+# The upgrade contract is in CLAUDE.md.
+upgrade-check: ## Is a newer release out? Writes file-dumps/upgrade/check.json [FROM_FILE=fw.json]
+	"$(ROOT_DIR)scripts/upgrade.sh" check $(if $(FROM_FILE),--from-file "$(FROM_FILE)")
+
+upgrade: ## Bump, diff upstream, verify; writes file-dumps/upgrade/report.* and CHANGELOG.md [FROM_FILE=fw.json]
+	"$(ROOT_DIR)scripts/upgrade.sh" run $(if $(FROM_FILE),--from-file "$(FROM_FILE)")
+
+upgrade-verify: ## Re-run build/test/schema-check and rewrite the report
+	"$(ROOT_DIR)scripts/upgrade.sh" verify
 
 extract-container-configs: ## Dump configs from a live upstream podman install into file-dumps/configs
 	rm -rf "$(ROOT_DIR)$(CONFIG_DUMP_DIR)" && mkdir -p "$(ROOT_DIR)$(CONFIG_DUMP_DIR)"
