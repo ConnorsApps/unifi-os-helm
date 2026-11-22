@@ -15,12 +15,46 @@ make build PLATFORMS=linux/arm64 TAG=<v>-arm64   # or make build-all (amd64 + ar
 make test                  # helm lint + render tests/values/* (needs subcharts: helm dependency update)
 make schema                # regenerate charts/unifi-os/values.schema.json from cmd/schema-gen
 make schema-check          # generator tests + fail if the committed schema is stale
+make upgrade-check         # is a newer UniFi OS release out? writes file-dumps/upgrade/check.json
+make upgrade               # bump, diff upstream, build/test/schema-check; writes report.json/report.md + CHANGELOG.md
+make upgrade-verify        # re-run the checks after fixes; rewrites the report
 scripts/render-matrix.sh <out-dir> [chart-dir]    # render the matrix; diff two runs structurally
 ```
 
-Upgrading UniFi OS: use the `upgrade-unifi-os` skill (`make check-update`, `make bump`,
-`make diff-upstream`). Ubiquiti's hosts are blocked in default cloud sandboxes;
-the scripts accept `--from-file` with a saved API response.
+Upgrading UniFi OS: use the `upgrade-unifi-os` skill (`make upgrade`). Ubiquiti's hosts are
+blocked in default cloud sandboxes; `FROM_FILE=fw-update.json make upgrade-check|upgrade` takes
+a saved API response.
+
+## Upgrade contract
+
+`scripts/upgrade.sh` owns the upgrade pipeline and its "needs human or agent review" signal. A
+console `repo-upgrade` workflow runs it in a sandbox with the docker CLI + buildx and no podman and
+no `docker run` (`CONTAINER_ENGINE=docker`), so everything that inspects an image is a Dockerfile
+stage (`snapshot-out`), never a `run`. Make collapses exit codes to 2, so status lives in JSON under
+`file-dumps/upgrade/` (repo-relative paths):
+
+- `make upgrade-check` writes `check.json` = `{"update": bool, "from": "<pinned>", "to": "<latest>",
+  "title": "Upgrade to unifi-os <latest>"}`. Exit 0 whenever the file was written; non-zero only on error.
+- `make upgrade` = `bump-uos-version.sh --latest`, `helm dependency update` if the subcharts are missing,
+  `diff-uos-images.sh` (committed pin at HEAD vs bumped tree, output in `diff/`), then `upgrade-verify`.
+  Re-running on an already bumped tree is fine; with nothing to upgrade it exits non-zero and writes no report.
+- `make upgrade-verify` = `make build` (always `PATCH_STRICT=true`), `make test`, `make schema-check`, then rewrites `report.json`,
+  `report.md` and the `CHANGELOG.md` section. Both exit 0 iff verified (every check passed) and write the
+  report either way; a missing report is an error (no update, lookup or bump failure).
+- `report.json`, exactly these keys: `from`, `to`, `chart_from`, `chart_to`, `title`, `brief`
+  (`.claude/skills/upgrade-unifi-os/SKILL.md`), `needs_review` (strings), `verified` (bool),
+  `checks` (`[{name, ok}]`: build, test, schema-check), `report_md` (`file-dumps/upgrade/report.md`),
+  `diff` (`file-dumps/upgrade/diff/upstream.diff`; `""` if the snapshot diff failed, which also adds a
+  `needs_review` reason).
+- `needs_review` rule (lives only in `upgrade.sh`): any snapshot other than `packages.txt` CHANGED,
+  any reference to the old version left in the tree (`scripts/stale-refs.sh`), any failed check.
+  Empty + `verified: true` means nothing the patches depend on changed.
+- `report.md` is posted verbatim as a public PR body: versions, chart versions, release date, the
+  (unread) release-notes link, the snapshot table and package changes, check results, `needs_review`
+  reasons and "Not verified: runtime boot". Nothing else: no local paths beyond repo-relative ones,
+  no hostnames, no raw logs (those stay in `file-dumps/upgrade/logs/`).
+- `CHANGELOG.md`: `upgrade` and `upgrade-verify` write or replace a `## <chart version>` section at the
+  top (headings are exactly `## X.Y.Z`; a parser windows by them). Don't hand-edit those sections.
 
 ## Layout
 
@@ -34,7 +68,7 @@ the scripts accept `--from-file` with a saved API response.
 | `charts/unifi-os/files/` | init/start scripts and the discovery shim, inlined via `.Files.Get` |
 | `tests/values/` | Render scenarios, each merged over `00-base.yaml` |
 | `cmd/schema-gen/` | Own Go module: hand-mirrored value types → `charts/unifi-os/values.schema.json` (subchart schemas read from the vendored `charts/*.tgz`) |
-| `scripts/` | Upgrade automation, `render-matrix.sh`, `extract-container-configs.sh` |
+| `scripts/` | Upgrade automation (`upgrade.sh`, `uos-latest.sh`, `bump-uos-version.sh`, `diff-uos-images.sh`, `stale-refs.sh`), `render-matrix.sh`, `extract-container-configs.sh` |
 | `.dockerignore` | Build context is `Dockerfile` + `image/` only |
 
 ## Invariants

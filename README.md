@@ -96,7 +96,10 @@ make build          # podman (CONTAINER_ENGINE=docker for buildx); make help lis
 ```
 
 `image/patch.sh` fails the build when an upstream change makes one of its edits miss or half-apply, so a
-passing `make build` is the verification.
+passing `make build` is the verification. `make upgrade-check` reports whether a newer UniFi OS release
+exists; `make upgrade` bumps the pin, diffs the upstream rootfs, builds and tests, and writes a report
+under `file-dumps/upgrade/` (see [CLAUDE.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/CLAUDE.md)).
+Chart and upgrade history: [CHANGELOG.md](https://github.com/ConnorsApps/unifi-os-helm/blob/main/CHANGELOG.md).
 
 ## Legal
 

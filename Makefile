@@ -23,7 +23,7 @@ CONFIG_DUMP_DIR ?= file-dumps/configs
 
 BUILD_ARGS = $(foreach v,UOS_INSTALLER_URL_AMD64 UOS_INSTALLER_SHA256_AMD64 UOS_INSTALLER_URL_ARM64 UOS_INSTALLER_SHA256_ARM64 PATCH_STRICT,--build-arg "$(v)=$($(v))")
 
-.PHONY: help build build-all test schema schema-check latest check-update bump diff-upstream extract-container-configs
+.PHONY: help build build-all test schema schema-check latest check-update bump diff-upstream upgrade-check upgrade upgrade-verify extract-container-configs
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-26s %s\n", $$1, $$2}'
@@ -71,6 +71,17 @@ bump: ## Bump uos-version.env + Chart.yaml to the latest release [FROM_FILE=fw.j
 
 diff-upstream: ## Diff two upstream installers' rootfs [OLD=<url> NEW=<url>]
 	PLATFORM="$(or $(PLATFORM),linux/amd64)" "$(ROOT_DIR)scripts/diff-uos-images.sh" $(if $(OLD),--old "$(OLD)") $(if $(NEW),--new "$(NEW)")
+
+# The upgrade contract (CLAUDE.md): status is JSON in file-dumps/upgrade/, because make
+# turns every failing exit code into 2. upgrade and upgrade-verify exit 0 iff verified.
+upgrade-check: ## Is a newer release out? Writes file-dumps/upgrade/check.json [FROM_FILE=fw.json]
+	"$(ROOT_DIR)scripts/upgrade.sh" check $(if $(FROM_FILE),--from-file "$(FROM_FILE)")
+
+upgrade: ## Bump, diff upstream, build/test/schema-check; writes report.json, report.md, CHANGELOG.md [FROM_FILE=fw.json]
+	"$(ROOT_DIR)scripts/upgrade.sh" run $(if $(FROM_FILE),--from-file "$(FROM_FILE)")
+
+upgrade-verify: ## Re-run build/test/schema-check on the bumped tree and rewrite the report
+	"$(ROOT_DIR)scripts/upgrade.sh" verify
 
 extract-container-configs: ## Dump configs from a live upstream podman install into file-dumps/configs
 	rm -rf "$(ROOT_DIR)$(CONFIG_DUMP_DIR)" && mkdir -p "$(ROOT_DIR)$(CONFIG_DUMP_DIR)"
